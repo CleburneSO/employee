@@ -276,3 +276,37 @@ table.team .p-role { min-width: 125px; }
 
 /* half-hour time pickers */
 table.entry select.t-in, table.entry select.t-out { margin: 0; min-width: 118px; }
+
+/* case numbers */
+.row > label.narrow { flex: 0 1 110px; }
+.case-result {
+  margin-top: 1rem; padding: 1rem; border: 2px solid var(--gold); border-radius: var(--radius);
+  background: #fffaf0; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+}
+.case-result > div:first-child { color: var(--muted); font-weight: 600; }
+.case-big { font-size: 1.9rem; font-weight: 800; letter-spacing: .04em; color: var(--primary); font-variant-numeric: tabular-nums; }
+.case-log-head { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: .5rem 1rem; }
+.case-log-head form { flex: 1 1 420px; justify-content: flex-end; }
+.case-log-head form label { margin-bottom: .6rem; }
+.case-log-head form .btn { margin-bottom: .6rem; }
+table.case-log td.case-no { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.case-log tr.is-void td:not(:last-child) { color: var(--muted); }
+table.case-log tr.is-void td.case-no { text-decoration: line-through; }
+.pager { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.pager span { color: var(--muted); font-size: .9rem; }
+.pager #case-print { margin-left: auto; }
+
+/* printed case log — mirrors the paper sheet, 30 per page */
+.case-sheet { font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; max-width: 7.6in; margin: 0 auto; }
+.case-sheet-title { display: flex; justify-content: space-between; font-size: 9px; color: #333; margin-bottom: 4px; }
+.case-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.case-sheet th { font-size: 12.5px; font-weight: 700; color: #000; text-transform: none; letter-spacing: 0;
+  text-align: center; vertical-align: bottom; line-height: 1.15; padding: 2px 3px; border: 0; border-bottom: 1px solid #000; }
+.case-sheet td { border: 1px solid #000; height: 25px; padding: 0 4px; font-size: 13px; color: #000;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.case-sheet td.r { text-align: right; }
+.case-sheet td.c { text-align: center; }
+.case-sheet td.sm { font-size: 10.5px; }
+.case-sheet tr.is-void td { color: #555; }
+.case-sheet tr.is-void td:last-child { text-decoration: line-through; }
+#case-next label { flex: 0 1 220px; }

@@ -29,7 +29,7 @@
   let mustSetPassword = linkType === 'invite' || linkType === 'recovery';
 
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const state = { session: null, profile: null, view: 'timesheets', people: {}, duties: [], filterUser: '' };
+  const state = { session: null, profile: null, view: 'timesheets', people: {}, duties: [], filterUser: '', cases: { year: null, q: '', page: 0 } };
   let loadedUserId = null;
 
   const TIME_OFF_TYPES = [
@@ -352,7 +352,7 @@
   const views = {};
 
   function renderShell() {
-    const tabs = [['timesheets', 'My Timesheets'], ['timeoff', 'Time Off']];
+    const tabs = [['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers']];
     if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team']);
     if (!tabs.some(([k]) => k === state.view)) state.view = 'timesheets';
 
@@ -904,6 +904,230 @@
       downloadCSV(`timesheets_${p}_to_${periodEnd(p)}.csv`, rows);
     });
   };
+
+  /* ---------------- case numbers ---------------- */
+  const CASES_PER_PAGE = 30;
+  const KINDS = ['A', 'I/O'];
+  const localToday = () => isoDate(new Date());
+  const myInitials = () => (state.profile.full_name || '').split(/\s+/).filter(Boolean)
+    .map((w) => w[0]).filter((c) => /[a-z]/i.test(c)).slice(0, 3).join('').toUpperCase();
+  const cleanSearch = (s) => s.replace(/[,()*%\\"'.:]/g, ' ').trim();
+  const canEditCase = (c) => isManager() || c.reserved_by === me();
+
+  function caseQuery(cs, withCount) {
+    let q = sb.from('case_numbers').select('*', withCount ? { count: 'exact' } : undefined).eq('year', cs.year);
+    const s = cleanSearch(cs.q);
+    if (s) q = q.or(['case_number', 'victim_defendant', 'charge', 'initials'].map((c) => `${c}.ilike.*${s}*`).join(','));
+    return q;
+  }
+
+  views.cases = async (el) => {
+    const cs = state.cases;
+    const thisYear = new Date().getFullYear();
+    cs.year = cs.year || thisYear;
+    const from = cs.page * CASES_PER_PAGE;
+    const [list, counter] = await Promise.all([
+      caseQuery(cs, true).order('seq', { ascending: false }).range(from, from + CASES_PER_PAGE - 1),
+      sb.from('case_counters').select('next_seq').eq('year', thisYear).maybeSingle()
+    ]);
+    if (list.error) throw list.error;
+    if (counter.error) throw counter.error;
+    const total = list.count || 0;
+    const pages = Math.max(1, Math.ceil(total / CASES_PER_PAGE));
+    if (cs.page >= pages && cs.page > 0) { cs.page = pages - 1; return views.cases(el); }
+    const nextSeq = counter.data?.next_seq || 1;
+    const years = [...Array(thisYear - 2024)].map((_, i) => thisYear - i);
+
+    el.innerHTML = `
+      <section class="card">
+        <h2>Reserve a case number</h2>
+        <form id="case-form" class="case-form" autocomplete="off">
+          <div class="row">
+            <label>Date<input type="date" name="case_date" value="${localToday()}" required></label>
+            <label class="narrow">INTS<input name="initials" value="${esc(myInitials())}" maxlength="4" required></label>
+            <label class="narrow">A – I/O<select name="kind"><option value=""></option>${KINDS.map((k) => `<option>${k}</option>`).join('')}</select></label>
+          </div>
+          <div class="row">
+            <label>Victim / Defendant<input name="victim_defendant"></label>
+            <label>Charge<input name="charge"></label>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit">Reserve next case number</button>
+            <span class="hint">Next up: about <strong>${esc(localToday().replace(/-/g, ''))}${String(nextSeq).padStart(4, '0')}</strong>. You can fill in details later.</span>
+          </div>
+        </form>
+        <div id="case-result"></div>
+      </section>
+
+      <section class="card">
+        <div class="case-log-head">
+          <h2>Case number log</h2>
+          <form id="case-search" class="row end">
+            <label class="narrow">Year<select name="year">${years.map((y) => `<option ${y === cs.year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
+            <label>Search<input name="q" value="${esc(cs.q)}" placeholder="Case #, name, charge or initials"></label>
+            <button class="btn" type="submit">Search</button>
+            ${cs.q ? '<button class="btn" type="button" id="case-clear">Clear</button>' : ''}
+          </form>
+        </div>
+        ${caseTable(list.data)}
+        <div class="pager">
+          <button class="btn small" id="pg-prev" ${cs.page === 0 ? 'disabled' : ''}>‹ Newer</button>
+          <span>Page ${cs.page + 1} of ${pages} · ${total} number${total === 1 ? '' : 's'}${cs.q ? ' found' : ''}</span>
+          <button class="btn small" id="pg-next" ${cs.page + 1 >= pages ? 'disabled' : ''}>Older ›</button>
+          <button class="btn small" id="case-print">Print log</button>
+        </div>
+      </section>
+
+      ${isManager() ? `<section class="card">
+        <h2>Case number settings</h2>
+        <form id="case-next" class="row end">
+          <label>Next count for ${thisYear}<input type="number" name="next" min="1" step="1" value="${nextSeq}"></label>
+          <button class="btn" type="submit">Save</button>
+        </form>
+        <p class="hint">The last 4 digits of the next number reserved. Set this right before you go live so numbering continues from your paper log — e.g. if the last number used was …0933, enter 934. It can only move forward.</p>
+      </section>` : ''}`;
+
+    $('#case-form').onsubmit = (e) => {
+      e.preventDefault();
+      const f = e.target;
+      withBusy(f.querySelector('button[type=submit]'), async () => {
+        const { data, error } = await sb.rpc('reserve_case_number', {
+          p_case_date: f.case_date.value || null, p_initials: f.initials.value,
+          p_victim_defendant: f.victim_defendant.value, p_kind: f.kind.value, p_charge: f.charge.value
+        });
+        if (error) throw error;
+        const row = Array.isArray(data) ? data[0] : data;
+        cs.q = ''; cs.page = 0; cs.year = thisYear;
+        await showView('cases');
+        $('#case-result').innerHTML = `<div class="case-result">
+          <div>Your case number</div>
+          <div class="case-big">${esc(row.case_number)}</div>
+          <button class="btn small" id="case-copy">Copy</button></div>`;
+        $('#case-copy').onclick = () => navigator.clipboard?.writeText(row.case_number).then(() => toast('Copied.'));
+        $('#case-result').scrollIntoView({ block: 'nearest' });
+      });
+    };
+    $('#case-search').onsubmit = (e) => {
+      e.preventDefault();
+      cs.q = e.target.q.value.trim(); cs.year = Number(e.target.year.value); cs.page = 0;
+      showView('cases');
+    };
+    $('#case-search').year.onchange = () => $('#case-search').requestSubmit();
+    if (cs.q) $('#case-clear').onclick = () => { cs.q = ''; cs.page = 0; showView('cases'); };
+    $('#pg-prev').onclick = () => { cs.page--; showView('cases'); };
+    $('#pg-next').onclick = () => { cs.page++; showView('cases'); };
+    $('#case-print').onclick = (e) => printCaseLog(e.target, total);
+    $$('[data-case]', el).forEach((b) => { b.onclick = () => openCase(list.data.find((c) => c.id === b.dataset.case)); });
+    if (isManager()) {
+      $('#case-next').onsubmit = (e) => {
+        e.preventDefault();
+        withBusy(e.target.querySelector('button'), async () => {
+          const { error } = await sb.rpc('set_next_case_seq', { p_year: thisYear, p_next: Number(e.target.next.value) });
+          if (error) throw error;
+          toast('Saved.');
+          showView('cases');
+        });
+      };
+    }
+  };
+
+  function caseTable(rows) {
+    if (!rows.length) return '<p class="muted">No case numbers yet.</p>';
+    return `<div class="table-wrap"><table class="list case-log">
+      <thead><tr><th>Date</th><th>INTS</th><th>Victim / Defendant</th><th>A – I/O</th><th>Charge</th><th class="num">Case #</th><th></th></tr></thead>
+      <tbody>${rows.map((c) => `<tr class="${c.void ? 'is-void' : ''}">
+        <td>${esc(fmtShort(c.case_date))}</td>
+        <td>${esc(c.initials)}</td>
+        <td>${esc(c.victim_defendant || '')}</td>
+        <td>${esc(c.kind || '')}</td>
+        <td>${c.void ? `<span class="badge badge-denied">Void</span> ${esc(c.void_reason || '')}` : esc(c.charge || '')}</td>
+        <td class="num case-no">${esc(c.case_number)}</td>
+        <td class="right">${canEditCase(c) ? `<button class="btn small" data-case="${c.id}">${c.void && !isManager() ? 'View' : 'Edit'}</button>` : ''}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  function openCase(c) {
+    const locked = c.void && !isManager();
+    const dis = locked ? 'disabled' : '';
+    openModal(`
+      <div class="doc">
+        <h2>Case # ${esc(c.case_number)} ${c.void ? '<span class="badge badge-denied">Void</span>' : ''}</h2>
+        <p class="muted">Reserved ${esc(fmtDateTime(c.reserved_at))}${isManager() ? ` by ${esc(personName(c.reserved_by, c.initials))}` : ''}${c.updated_at ? ` · last changed ${esc(fmtDateTime(c.updated_at))}` : ''}</p>
+        ${c.void ? `<div class="notice warn">Voided${c.voided_at ? ` ${esc(fmtDateTime(c.voided_at))}` : ''}${isManager() && c.voided_by ? ` by ${esc(personName(c.voided_by))}` : ''}: ${esc(c.void_reason || '')}</div>` : ''}
+        <form id="case-edit" autocomplete="off">
+          <div class="row">
+            <label>Date<input type="date" name="case_date" value="${esc(c.case_date)}" required ${dis}></label>
+            <label class="narrow">INTS<input name="initials" value="${esc(c.initials)}" maxlength="4" ${dis}></label>
+            <label class="narrow">A – I/O<select name="kind" ${dis}><option value=""></option>${KINDS.map((k) => `<option ${k === c.kind ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
+          </div>
+          <label>Victim / Defendant<input name="victim_defendant" value="${esc(c.victim_defendant || '')}" ${dis}></label>
+          <label>Charge<input name="charge" value="${esc(c.charge || '')}" ${dis}></label>
+          ${locked ? '' : '<button class="btn primary" type="submit">Save changes</button>'}
+        </form>
+        ${!c.void ? `<div class="review">
+          <label>Void this number — reason (required)<input id="void-reason" placeholder="e.g. Reserved by mistake / duplicate"></label>
+          <button class="btn danger" id="case-void">Void case number</button>
+          <p class="hint">Voided numbers stay in the log and are never reused.</p>
+        </div>` : ''}
+        ${c.void && isManager() ? '<div class="review"><button class="btn" id="case-restore">Restore (un-void)</button></div>' : ''}
+      </div>`);
+    const save = (patch, msg, btn) => withBusy(btn, async () => {
+      const { error } = await sb.from('case_numbers').update(patch).eq('id', c.id);
+      if (error) throw error;
+      closeModal(); toast(msg); showView('cases');
+    });
+    const f = $('#case-edit');
+    f.onsubmit = (e) => {
+      e.preventDefault();
+      if (locked) return;
+      save({ case_date: f.case_date.value, initials: f.initials.value, kind: f.kind.value || null,
+        victim_defendant: f.victim_defendant.value.trim() || null, charge: f.charge.value.trim() || null },
+        'Saved.', f.querySelector('button[type=submit]'));
+    };
+    if (!c.void) $('#case-void').onclick = (e) => {
+      const reason = $('#void-reason').value.trim();
+      if (!reason) return toast('Give a reason for voiding.', true);
+      if (!confirm(`Void case number ${c.case_number}? It stays in the log marked VOID and won’t be reused.`)) return;
+      save({ void: true, void_reason: reason }, 'Case number voided.', e.target);
+    };
+    if (c.void && isManager()) $('#case-restore').onclick = (e) => save({ void: false }, 'Restored.', e.target);
+  }
+
+  // Printed log: 30 numbers per page, same columns as the paper sheet
+  async function printCaseLog(btn, total) {
+    const cs = state.cases;
+    if (!total) return toast('Nothing to print.', true);
+    if (total > 600 && !confirm(`That’s ${total} numbers (${Math.ceil(total / CASES_PER_PAGE)} pages). Print them all?`)) return;
+    withBusy(btn, async () => {
+      const rows = [];
+      for (let from = 0; from < total; from += 1000) {
+        const { data, error } = await caseQuery(cs, false).order('seq', { ascending: true }).range(from, from + 999);
+        if (error) throw error;
+        rows.push(...data);
+      }
+      const pages = [];
+      for (let i = 0; i < rows.length; i += CASES_PER_PAGE) pages.push(rows.slice(i, i + CASES_PER_PAGE));
+      const title = `${ORG} — CASE NUMBERS ${cs.year}${cs.q ? ` — “${cs.q}”` : ''}`;
+      openModal(`
+        <div class="modal-head no-print"><strong>Case number log ${cs.year}</strong> · ${rows.length} numbers · ${pages.length} page${pages.length === 1 ? '' : 's'}
+          <div class="actions"><button class="btn primary" id="print-btn">Print</button></div></div>
+        <div class="print-area">${pages.map((pg, n) => `<div class="sheet-page">
+          <div class="case-sheet">
+            <div class="case-sheet-title"><span>${esc(title)}</span><span>Page ${n + 1} of ${pages.length}</span></div>
+            <table>
+              <colgroup><col style="width:15%"><col style="width:6%"><col style="width:29%"><col style="width:5%"><col style="width:25%"><col style="width:20%"></colgroup>
+              <thead><tr><th>DATE</th><th>INTS</th><th>VICTIM/<br>DEFENDANT</th><th>A<br>I/O</th><th>CHARGE</th><th>CASE #</th></tr></thead>
+              <tbody>${pg.map((c) => `<tr class="${c.void ? 'is-void' : ''}">
+                <td class="r">${esc(fmtShort(c.case_date))}</td><td class="c">${esc(c.initials)}</td>
+                <td>${esc(c.victim_defendant || '')}</td><td class="c">${esc(c.kind || '')}</td>
+                <td class="sm">${c.void ? `VOID — ${esc(c.void_reason || '')}` : esc(c.charge || '')}</td>
+                <td class="r">${esc(c.case_number)}</td></tr>`).join('')}
+                ${'<tr><td></td><td></td><td></td><td></td><td></td><td></td></tr>'.repeat(CASES_PER_PAGE - pg.length)}</tbody>
+            </table>
+          </div></div>`).join('')}</div>`);
+      $('#print-btn').onclick = () => window.print();
+    });
+  }
 
   /* ---------------- manager: team & special duties ---------------- */
   views.team = async (el) => {

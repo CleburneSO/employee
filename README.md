@@ -57,6 +57,12 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - *My Timesheets:* pick the pay period, enter time in/out (overnight shifts are handled) and any explanation for each day, fill in vacation / holiday / sick / traffic OT / K9 hours, sign, type their name, check the box, submit. Totals are figured automatically (and re-checked by the database). They can resubmit (with a new signature) until it's approved. If a manager sends it back, the note shows at the top.
 - *Time Off:* pick type and dates, submit. They can cancel while it's still pending.
 
+**Case Numbers (everyone)**
+- Fill in Date, INTS, Victim/Defendant, A – I/O and Charge (details can be added later) and click **Reserve next case number**. The database hands out the next number (e.g. `202609230934` = reserved 9/23/2026, count 0934), so two people can never get the same one. The count runs all year and restarts at 0001 each January.
+- The log shows 30 numbers per page, newest first, with search by case #, name, charge or initials. **Print log** prints 30 per page like the paper sheet.
+- You can edit details on numbers you reserved; managers can edit any. Mistakes are **voided** with a reason — numbers are never deleted or reused. Only managers can restore a voided number.
+- **Going live:** a manager sets **Next count** under Case number settings to one more than the last number used on paper (e.g. last used 0933 → enter 934).
+
 **Managers**
 - *Approvals:* review pending timesheets and time off, approve or send back / deny with a note. Open any timesheet and click **Print / Save PDF** for a paper copy.
 - *Payroll:* pick a pay period and **Print all timesheets** (one page per deputy), or download a CSV (one row per person, or one row per day).
