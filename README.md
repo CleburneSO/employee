@@ -60,7 +60,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 **Managers**
 - *Approvals:* review pending timesheets and time off, approve or send back / deny with a note. Open any timesheet and click **Print / Save PDF** for a paper copy.
 - *Payroll:* pick a pay period and **Print all timesheets** (one page per deputy), or download a CSV (one row per person, or one row per day).
-- *Team:* edit names and roles, and tick which **special duties** each person has. Below that, manage the duty list: short name (K9), the line printed on the timesheet, the small-print note, optional **auto hours** pre-filled each pay period, **Everyone** (show on all timesheets), and **Active** (turn off to retire a duty; old timesheets keep it). It starts with Traffic OT, K9, DEA and Supervisor. Rename or edit them to match your wording.
+- *Team:* edit names and roles, **Deactivate** people who leave (they're locked out immediately; their records are kept and still searchable; don't delete them in Supabase), and tick which **special duties** each person has. Below that, manage the duty list: short name (K9), the line printed on the timesheet, the small-print note, optional **auto hours** pre-filled each pay period, **Everyone** (show on all timesheets), and **Active** (turn off to retire a duty; old timesheets keep it). It starts with Traffic OT, K9, DEA and Supervisor. Rename or edit them to match your wording.
 
 ## Good to know
 

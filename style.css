@@ -266,3 +266,13 @@ table.extras tr.duty-row.has-hours th, table.extras tr.duty-row.has-hours td { b
 .filter-bar label { flex: 0 1 320px; margin-bottom: .6rem; }
 .filter-bar .btn { margin-bottom: .6rem; }
 .filter-bar .hint { flex-basis: 100%; margin: 0 0 .5rem; }
+
+/* deactivate */
+td.nowrap { white-space: nowrap; }
+td.nowrap .btn + .btn { margin-left: .35rem; }
+.count.muted-count { background: #8a93a3; }
+table.team .p-role { min-width: 125px; }
+.auth-card:has(.auth-logo) h1 { text-align: center; }
+
+/* half-hour time pickers */
+table.entry select.t-in, table.entry select.t-out { margin: 0; min-width: 118px; }

@@ -207,6 +207,7 @@
     loadedUserId = session.user.id;
     try {
       await loadProfile();
+      if (state.profile.active === false) return renderDeactivated();
       if (!state.profile.full_name) return renderNameSetup();
       if (isManager()) await loadPeople();
       renderShell();
@@ -232,7 +233,7 @@
   }
 
   async function loadPeople() {
-    const { data, error } = await sb.from('profiles').select('id, full_name, email, role').order('full_name');
+    const { data, error } = await sb.from('profiles').select('id, full_name, email, role, active, deactivated_at').order('full_name');
     if (error) throw error;
     state.people = Object.fromEntries(data.map((p) => [p.id, p]));
     return data;
@@ -313,6 +314,16 @@
     };
   }
 
+  function renderDeactivated() {
+    app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
+      ${logoImg('auth-logo')}
+      <h1>Account deactivated</h1>
+      <p class="muted">This account no longer has access to the employee portal. If you think this is a mistake, contact your supervisor.</p>
+      <button class="btn block" id="so">Sign out</button>
+    </div></div>`;
+    $('#so').onclick = () => sb.auth.signOut();
+  }
+
   function renderNameSetup() {
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
       ${logoImg('auth-logo')}
@@ -380,13 +391,28 @@
     return mins / 60;
   }
 
+  // Times are kept in 30-minute steps: 00:00, 00:30 … 23:30
+  const HALF_HOURS = [...Array(48)].map((_, i) => {
+    const h = Math.floor(i / 2), m = i % 2 ? '30' : '00';
+    const v = `${String(h).padStart(2, '0')}:${m}`;
+    const label = `${h % 12 || 12}:${m} ${h < 12 ? 'AM' : 'PM'}`;
+    return [v, label];
+  });
+  const isHalfHourTime = (v) => /^([01]\d|2[0-3]):(00|30)$/.test(v);
+  const isHalfStep = (n) => Math.abs(n * 2 - Math.round(n * 2)) < 1e-9;
+  function timeSelect(cls, value, label) {
+    const extra = value && !isHalfHourTime(value) ? `<option value="${esc(value)}" selected>${esc(value)} (fix)</option>` : '';
+    return `<select class="${cls}" aria-label="${label}"><option value=""></option>${extra}${HALF_HOURS.map(([v, l]) =>
+      `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  }
+
   function buildRows(start, entries = []) {
     $('#ts-rows').innerHTML = periodDays(start).map((iso) => {
       const e = entries.find((x) => x.date === iso) || {};
       return `<tr data-date="${iso}" data-label="${esc(fmtShort(iso))}">
         <td class="day"><strong>${esc(fmtShort(iso))}</strong><span>${esc(fmtDay(iso))}</span></td>
-        <td><input type="time" class="t-in" value="${esc(e.in || '')}" aria-label="Time in"></td>
-        <td><input type="time" class="t-out" value="${esc(e.out || '')}" aria-label="Time out"></td>
+        <td>${timeSelect('t-in', e.in || '', 'Time in')}</td>
+        <td>${timeSelect('t-out', e.out || '', 'Time out')}</td>
         <td class="num t-hours"></td>
         <td><input class="t-expl" value="${esc(e.explanation || '')}" placeholder="" aria-label="Explanation"></td>
       </tr>`;
@@ -443,18 +469,18 @@
             <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
             <tbody id="ts-rows"></tbody>
           </table></div>
-          <p class="hint">Hours are figured from time in and time out. Overnight shifts are handled automatically.</p>
+          <p class="hint">Times are in 30-minute steps. Hours are figured from time in and time out, and overnight shifts are handled automatically. Other hours go in half-hour steps (for example 4 or 4.5).</p>
 
           <div class="table-wrap"><table class="grid extras">
             <tbody>
               <tr class="total"><th>Total Hours Worked</th><td class="num" id="ts-total">0.00</td><td class="hint">This is the number of hours you actually worked.</td></tr>
               ${EXTRA_HOURS.map(([k, label, hint]) => `<tr>
                 <th><label for="x-${k}">${esc(label)}</label></th>
-                <td><input type="number" id="x-${k}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
+                <td><input type="number" id="x-${k}" min="0" step="0.5" placeholder="0" inputmode="decimal"></td>
                 <td class="hint">${esc(hint)}</td></tr>`).join('')}
               ${myDuties.map((d) => `<tr class="duty-row">
                 <th><label for="d-${d.id}">${esc(d.label)}</label> <span class="chip">${esc(d.name)}</span></th>
-                <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
+                <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" min="0" step="0.5" placeholder="0" inputmode="decimal"></td>
                 <td class="hint">${esc(d.note)}</td></tr>`).join('')}
               <tr class="total"><th>Total Hours To Be Paid</th><td class="num" id="ts-paid">0.00</td><td></td></tr>
             </tbody>
@@ -523,11 +549,16 @@
           const i = $('.t-in', tr).value, o = $('.t-out', tr).value;
           const expl = $('.t-expl', tr).value.trim();
           if ((i && !o) || (!i && o)) throw new Error(`Enter both time in and time out for ${tr.dataset.label}.`);
+          if ((i && !isHalfHourTime(i)) || (o && !isHalfHourTime(o))) throw new Error(`Times must be on the hour or half hour — check ${tr.dataset.label}.`);
           if (!i && !expl) continue;
           entries.push({ date: tr.dataset.date, in: i, out: o, hours: round2(calcHours(i, o)), explanation: expl });
         }
         const extras = readExtras();
         const duty_hours = readDuties();
+        const badExtra = EXTRA_HOURS.find(([k]) => !isHalfStep(extras[k]));
+        if (badExtra) throw new Error(`${badExtra[1]} must be in half-hour steps (for example 4 or 4.5).`);
+        const badDuty = duty_hours.find((d) => !isHalfStep(d.hours));
+        if (badDuty) throw new Error(`${state.duties.find((x) => x.id === badDuty.duty_id)?.label || 'Special duty hours'} must be in half-hour steps (for example 4 or 4.5).`);
         const anyHours = entries.some((x) => x.hours > 0) || Object.values(extras).some((v) => v > 0)
           || duty_hours.some((d) => d.hours > 0);
         if (!anyHours) throw new Error('Enter at least one day worked or some vacation, holiday or sick hours.');
@@ -798,7 +829,7 @@
         <label>Show person
           <select id="f-person">
             <option value="">Everyone</option>
-            ${people.map((p) => `<option value="${p.id}" ${p.id === who ? 'selected' : ''}>${esc(p.full_name || p.email)}</option>`).join('')}
+            ${people.map((p) => `<option value="${p.id}" ${p.id === who ? 'selected' : ''}>${esc(p.full_name || p.email)}${p.active === false ? ' (deactivated)' : ''}</option>`).join('')}
           </select>
         </label>
         ${who ? '<button class="btn" id="f-clear">Show everyone</button>' : ''}
@@ -879,14 +910,16 @@
     const [people, duties, assigns] = await Promise.all([loadPeople(), loadDuties(), loadAssignments()]);
     const has = new Set(assigns.map((a) => `${a.user_id}|${a.duty_id}`));
     const active = duties.filter((d) => d.active);
+    const current = people.filter((p) => p.active !== false);
+    const former = people.filter((p) => p.active === false);
 
     el.innerHTML = `
       <section class="card">
         <h2>Team</h2>
-        <p class="muted">To add someone, invite them from your Supabase dashboard: <strong>Authentication → Users → Invite user</strong>. The name here is what prints at the top of their timesheet. Tick the special duties each person has — only those lines will show on their timesheet.</p>
+        <p class="muted">To add someone, invite them from your Supabase dashboard: <strong>Authentication → Users → Invite user</strong>. The name here is what prints at the top of their timesheet. Tick the special duties each person has — only those lines will show on their timesheet. When someone leaves, click <strong>Deactivate</strong> (don’t delete them in Supabase — that would lose their records).</p>
         <div class="table-wrap"><table class="list team">
           <thead><tr><th>Name</th><th>Email</th><th>Special duties</th><th>Role</th><th></th></tr></thead>
-          <tbody>${people.map((p) => `<tr data-id="${p.id}">
+          <tbody>${current.map((p) => `<tr data-id="${p.id}">
             <td><input class="p-name" value="${esc(p.full_name)}"></td>
             <td class="email">${esc(p.email)}</td>
             <td class="duty-checks">${active.length ? active.map((d) => d.everyone
@@ -897,10 +930,24 @@
               <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
               <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
             </select></td>
-            <td class="right"><button class="btn small p-save">Save</button></td>
+            <td class="right nowrap"><button class="btn small p-save">Save</button>
+              ${p.id === me() ? '' : `<button class="btn small danger p-deactivate" data-name="${esc(p.full_name || p.email)}">Deactivate</button>`}</td>
           </tr>`).join('')}</tbody>
         </table></div>
       </section>
+
+      ${former.length ? `<section class="card">
+        <h2>Deactivated <span class="count muted-count">${former.length}</span></h2>
+        <p class="muted">These people can’t sign in to see or submit anything. Their timesheets and time off are kept — find them on the Approvals tab with <strong>Show person</strong>.</p>
+        <div class="table-wrap"><table class="list">
+          <thead><tr><th>Name</th><th>Email</th><th>Deactivated</th><th></th></tr></thead>
+          <tbody>${former.map((p) => `<tr data-id="${p.id}">
+            <td>${esc(p.full_name)}</td><td class="muted">${esc(p.email)}</td>
+            <td>${esc(fmtDateTime(p.deactivated_at))}</td>
+            <td class="right"><button class="btn small p-reactivate" data-name="${esc(p.full_name || p.email)}">Reactivate</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </section>` : ''}
 
       <section class="card">
         <h2>Special duties</h2>
@@ -944,6 +991,22 @@
       };
     });
 
+    const setActive = (b, activeFlag) => {
+      const id = b.closest('tr').dataset.id;
+      const msg = activeFlag
+        ? `Reactivate ${b.dataset.name}? They’ll be able to sign in and submit timesheets again.`
+        : `Deactivate ${b.dataset.name}?\n\nThey’ll be locked out right away. Their timesheets and time off are kept. Any timesheet or time off they already submitted stays in Approvals so you can still approve their final pay.`;
+      if (!confirm(msg)) return;
+      withBusy(b, async () => {
+        const { error } = await sb.from('profiles').update({ active: activeFlag }).eq('id', id);
+        if (error) throw error;
+        toast(activeFlag ? 'Reactivated.' : 'Deactivated.');
+        showView('team');
+      });
+    };
+    $$('.p-deactivate', el).forEach((b) => { b.onclick = () => setActive(b, false); });
+    $$('.p-reactivate', el).forEach((b) => { b.onclick = () => setActive(b, true); });
+
     $$('.d-save', el).forEach((b) => {
       b.onclick = () => {
         const tr = b.closest('tr');
@@ -957,6 +1020,7 @@
         };
         withBusy(b, async () => {
           if (!row.name) throw new Error('Give the duty a short name, like K9.');
+          if (!isHalfStep(row.default_hours)) throw new Error('Auto hours must be in half-hour steps (for example 0.5 or 4).');
           if (!row.label) row.label = row.name + ' Hours';
           const res = tr.dataset.id
             ? await sb.from('duties').update(row).eq('id', tr.dataset.id)
@@ -974,7 +1038,7 @@
       <td><input class="d-name" value="${esc(d.name)}" placeholder="${d.id ? '' : 'New, e.g. DEA'}"></td>
       <td><input class="d-label" value="${esc(d.label)}" placeholder="e.g. DEA Overtime Hours"></td>
       <td><input class="d-note" value="${esc(d.note)}" placeholder="Optional"></td>
-      <td><input class="d-default" type="number" min="0" step="0.25" value="${Number(d.default_hours) || ''}" placeholder="0"></td>
+      <td><input class="d-default" type="number" min="0" step="0.5" value="${Number(d.default_hours) || ''}" placeholder="0"></td>
       <td class="center"><input type="checkbox" class="d-everyone" ${d.everyone ? 'checked' : ''}></td>
       <td class="center"><input type="checkbox" class="d-active" ${d.active ? 'checked' : ''}></td>
       <td class="right"><button class="btn small ${d.id ? '' : 'primary'} d-save">${d.id ? 'Save' : 'Add'}</button></td>
