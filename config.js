@@ -3,8 +3,8 @@
 // by the Row Level Security rules in schema.sql. NEVER put the service_role
 // (secret) key here.
 window.APP_CONFIG = {
-  SUPABASE_URL: 'https://YOUR-PROJECT.supabase.co',
-  SUPABASE_ANON_KEY: 'YOUR-ANON-OR-PUBLISHABLE-KEY',
+  SUPABASE_URL: 'https://tywkcyehermpttuvkmta.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_UbA262eQKl-r6EBT1vOS6g_t4mju8Sz',
 
   // Printed at the top of every timesheet
   COMPANY_NAME: "CLEBURNE COUNTY SHERIFF'S OFFICE",
