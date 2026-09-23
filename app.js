@@ -13,19 +13,47 @@
     return;
   }
 
+  const ORG = cfg.COMPANY_NAME || 'Employee Portal';
+  const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
+  const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
+  const PERIOD_ANCHOR = cfg.PAY_PERIOD_START || '2025-06-12';
+
   // Invite and password-reset links land here with the link type in the URL hash.
   // Read it before supabase-js consumes and clears the hash.
   const linkType = new URLSearchParams(location.hash.slice(1)).get('type');
   let mustSetPassword = linkType === 'invite' || linkType === 'recovery';
 
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const state = { session: null, profile: null, view: 'timesheets', people: {} };
+  const state = { session: null, profile: null, view: 'timesheets', people: {}, duties: [] };
   let loadedUserId = null;
 
   const TIME_OFF_TYPES = [
     ['vacation', 'Vacation'], ['sick', 'Sick'], ['personal', 'Personal'],
     ['unpaid', 'Unpaid'], ['other', 'Other']
   ];
+
+  // Hour lines every employee has (matches the paper Deputies Daily Report)
+  const EXTRA_HOURS = [
+    ['vacation_hours', 'Total Vacation Hours', 'Please list here Vacation hours you have used or would like cashed out.'],
+    ['holiday_hours', 'Total Holiday Hours', ''],
+    ['sick_hours', 'Total Sick Hours', 'Note: Once you reach 80 hours (including Holiday Hours) sick leave stops. A Dr.’s excuse is required to use sick leave for more than 2 consecutive days.']
+  ];
+  // Columns used by the first version, before special duties were assignable
+  const LEGACY_HOURS = [
+    ['traffic_ot_hours', 'Traffic OT', 'Total Traffic Overtime Hours', 'This is only for grant overtime hours worked such as STEP.'],
+    ['k9_hours', 'K9', 'K9 At Home Care', '.5 HOUR FOR UNSCHEDULED WORK DAYS']
+  ];
+  // Special-duty lines on a saved timesheet (K9, DEA, Supervisor, …)
+  function dutyLines(t) {
+    const lines = (t.duty_hours || []).map((d) => ({ ...d, hours: Number(d.hours) || 0 }));
+    for (const [k, name, label, note] of LEGACY_HOURS) {
+      if (Number(t[k])) lines.push({ name, label, note, hours: Number(t[k]) });
+    }
+    return lines;
+  }
+  const dutyChips = (t) => dutyLines(t).filter((d) => d.hours > 0)
+    .map((d) => `<span class="chip">${esc(d.name)} ${hrs(d.hours)}</span>`).join(' ');
+  const SIGN_STATEMENT = 'By signing, you agree that the time reported is reported accurate and true.';
 
   /* ---------------- helpers ---------------- */
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -35,22 +63,43 @@
   const me = () => state.session.user.id;
   const isManager = () => state.profile?.role === 'manager';
   const round2 = (n) => Math.round(n * 100) / 100;
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const hrs = (v) => Number(v || 0).toFixed(2);
 
   const parseDate = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
   const isoDate = (d) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-  const mondayOf = (d) => {
-    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    return addDays(x, -((x.getDay() + 6) % 7));
-  };
   const fmtDate = (s) => parseDate(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  const fmtDay = (s) => parseDate(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const fmtShort = (s) => { const d = parseDate(s); return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; };
+  const fmtDay = (s) => parseDate(s).toLocaleDateString(undefined, { weekday: 'short' });
   const fmtDateTime = (ts) => ts ? new Date(ts).toLocaleString() : '';
   const badge = (s) => `<span class="badge badge-${esc(s)}">${esc(s)}</span>`;
   const typeLabel = (t) => (TIME_OFF_TYPES.find(([k]) => k === t) || [t, t])[1];
   const dayCount = (a, b) => Math.round((parseDate(b) - parseDate(a)) / 86400000) + 1;
   const dateRange = (a, b) => a === b ? fmtDate(a) : `${fmtDate(a)} – ${fmtDate(b)}`;
+
+  /* pay periods */
+  function periodStartFor(d) {
+    const anchor = parseDate(PERIOD_ANCHOR);
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diff = Math.round((x - anchor) / 86400000);
+    return addDays(anchor, Math.floor(diff / PERIOD_DAYS) * PERIOD_DAYS);
+  }
+  const periodEnd = (s) => isoDate(addDays(parseDate(s), PERIOD_DAYS - 1));
+  const periodLabel = (s) => `${fmtShort(s)} – ${fmtShort(periodEnd(s))}`;
+  const periodDays = (s) => [...Array(PERIOD_DAYS)].map((_, i) => isoDate(addDays(parseDate(s), i)));
+  function periodOptions(extra = [], back = 8, ahead = 1) {
+    const cur = periodStartFor(new Date());
+    const set = new Set(extra);
+    for (let i = ahead; i >= -back; i--) set.add(isoDate(addDays(cur, i * PERIOD_DAYS)));
+    return [...set].sort().reverse();
+  }
+  const currentPeriod = () => isoDate(periodStartFor(new Date()));
+  const previousPeriod = () => isoDate(addDays(periodStartFor(new Date()), -PERIOD_DAYS));
+  const periodSelect = (id, selected, extra = []) =>
+    `<select id="${id}">${periodOptions(extra).map((p) =>
+      `<option value="${p}" ${p === selected ? 'selected' : ''}>${periodLabel(p)}${p === currentPeriod() ? ' (current)' : ''}</option>`).join('')}</select>`;
 
   function personName(id, fallback = '') {
     if (id === me()) return state.profile.full_name;
@@ -75,6 +124,7 @@
   function openModal(html) {
     $('#modal-body').innerHTML = html;
     $('#modal').classList.remove('hidden');
+    $('#modal').scrollTop = 0;
   }
   function closeModal() { $('#modal').classList.add('hidden'); $('#modal-body').innerHTML = ''; }
   $('#modal .modal-close').onclick = closeModal;
@@ -183,10 +233,25 @@
     return data;
   }
 
+  async function loadDuties() {
+    const { data, error } = await sb.from('duties').select('*').order('sort').order('name');
+    if (error) throw error;
+    state.duties = data;
+    return data;
+  }
+
+  async function loadAssignments(userId) {
+    let q = sb.from('profile_duties').select('user_id, duty_id');
+    if (userId) q = q.eq('user_id', userId);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data;
+  }
+
   function renderLogin(mode = 'login') {
     const reset = mode === 'reset';
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
-      <h1>${esc(cfg.COMPANY_NAME || 'Employee Portal')}</h1>
+      <h1>${esc(ORG)}</h1>
       <p class="muted">${reset ? 'Enter your email and we’ll send you a reset link.' : 'Sign in to your account.'}</p>
       <form id="auth-form">
         <label>Email<input type="email" name="email" required autocomplete="email"></label>
@@ -244,7 +309,7 @@
   function renderNameSetup() {
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
       <h1>Welcome!</h1>
-      <p class="muted">What’s your full name? This is how you’ll appear to your manager.</p>
+      <p class="muted">What’s your full name? This is how it will print on your timesheet.</p>
       <form id="name-form">
         <label>Full name<input name="name" required autocomplete="name"></label>
         <button class="btn primary block" type="submit">Continue</button>
@@ -274,7 +339,7 @@
 
     app.innerHTML = `
       <header class="topbar">
-        <div class="brand">${esc(cfg.COMPANY_NAME || 'Employee Portal')}</div>
+        <div class="brand">${esc(ORG)}</div>
         <div class="user">
           <span>${esc(state.profile.full_name)}</span>
           <span class="role">${esc(state.profile.role)}</span>
@@ -297,72 +362,108 @@
     catch (err) { el.innerHTML = `<div class="card"><p class="error-text">${esc(err.message)}</p></div>`; }
   }
 
-  /* ---------------- timesheets ---------------- */
-  function calcHours(inV, outV, brk) {
+  /* ---------------- timesheets: entry ---------------- */
+  function calcHours(inV, outV) {
     if (!inV || !outV) return 0;
     const [ih, im] = inV.split(':').map(Number);
     const [oh, om] = outV.split(':').map(Number);
     let mins = (oh * 60 + om) - (ih * 60 + im);
-    if (mins < 0) mins += 1440; // overnight shift
-    mins -= Number(brk) || 0;
-    return Math.max(0, mins / 60);
+    if (mins <= 0) mins += 1440; // overnight shift (e.g. 18:00 → 06:00)
+    return mins / 60;
   }
 
-  function buildRows(weekStart, entries = []) {
-    const tbody = $('#ts-rows');
-    tbody.innerHTML = [...Array(7)].map((_, i) => {
-      const iso = isoDate(addDays(parseDate(weekStart), i));
+  function buildRows(start, entries = []) {
+    $('#ts-rows').innerHTML = periodDays(start).map((iso) => {
       const e = entries.find((x) => x.date === iso) || {};
-      return `<tr data-date="${iso}" data-label="${esc(fmtDay(iso))}">
-        <td>${esc(fmtDay(iso))}</td>
-        <td><input type="time" class="t-in" value="${esc(e.in || '')}"></td>
-        <td><input type="time" class="t-out" value="${esc(e.out || '')}"></td>
-        <td><input type="number" class="t-break" min="0" step="5" placeholder="0" value="${esc(e.break_min ?? '')}"></td>
-        <td class="num t-hours">0.00</td>
+      return `<tr data-date="${iso}" data-label="${esc(fmtShort(iso))}">
+        <td class="day"><strong>${esc(fmtShort(iso))}</strong><span>${esc(fmtDay(iso))}</span></td>
+        <td><input type="time" class="t-in" value="${esc(e.in || '')}" aria-label="Time in"></td>
+        <td><input type="time" class="t-out" value="${esc(e.out || '')}" aria-label="Time out"></td>
+        <td class="num t-hours"></td>
+        <td><input class="t-expl" value="${esc(e.explanation || '')}" placeholder="" aria-label="Explanation"></td>
       </tr>`;
     }).join('');
-    recalc();
+  }
+
+  function readExtras() {
+    return Object.fromEntries(EXTRA_HOURS.map(([k]) => [k, round2(num($(`#x-${k}`).value))]));
+  }
+
+  function readDuties() {
+    return $$('.duty-input').map((i) => ({ duty_id: i.dataset.duty, hours: round2(num(i.value)) }));
   }
 
   function recalc() {
-    let total = 0;
+    let worked = 0;
     $$('#ts-rows tr').forEach((tr) => {
-      const h = calcHours($('.t-in', tr).value, $('.t-out', tr).value, $('.t-break', tr).value);
-      $('.t-hours', tr).textContent = h.toFixed(2);
-      total += h;
+      const h = calcHours($('.t-in', tr).value, $('.t-out', tr).value);
+      $('.t-hours', tr).textContent = h ? h.toFixed(2) : '';
+      worked += round2(h);
     });
-    $('#ts-total').textContent = total.toFixed(2);
+    const x = readExtras();
+    const special = readDuties().reduce((a, d) => a + d.hours, 0);
+    $$('.duty-input').forEach((i) => i.closest('tr').classList.toggle('has-hours', num(i.value) > 0));
+    const paid = worked + special + Object.values(x).reduce((a, b) => a + b, 0);
+    $('#ts-total').textContent = hrs(worked);
+    $('#ts-paid').textContent = hrs(paid);
+    const warn = $('#ts-warn');
+    if (x.sick_hours > 0 && worked + x.holiday_hours + x.sick_hours > 80) {
+      warn.textContent = `Heads up: worked + holiday + sick comes to ${hrs(worked + x.holiday_hours + x.sick_hours)} hours. Sick leave stops once you reach 80 hours (including holiday hours).`;
+      warn.classList.remove('hidden');
+    } else warn.classList.add('hidden');
   }
 
   views.timesheets = async (el) => {
-    const { data: mine, error } = await sb.from('timesheets').select('*')
-      .eq('user_id', me()).order('week_start', { ascending: false });
+    const [{ data: mine, error }, , assigned] = await Promise.all([
+      sb.from('timesheets').select('*').eq('user_id', me()).order('period_start', { ascending: false }),
+      loadDuties(),
+      loadAssignments(me())
+    ]);
     if (error) throw error;
+    const myIds = new Set(assigned.map((a) => a.duty_id));
+    const myDuties = state.duties.filter((d) => d.active && (d.everyone || myIds.has(d.id)));
 
     el.innerHTML = `
       <section class="card">
         <h2>Submit a timesheet</h2>
-        <form id="ts-form">
+        <form id="ts-form" autocomplete="off">
           <div class="row">
-            <label>Week starting (Monday)<input type="date" id="ts-week" required></label>
+            <label>Pay period${periodSelect('ts-period', currentPeriod(), mine.map((t) => t.period_start))}</label>
           </div>
           <div id="ts-status" class="notice hidden"></div>
-          <div class="table-wrap"><table class="grid">
-            <thead><tr><th>Day</th><th>Time in</th><th>Time out</th><th>Break (min)</th><th class="num">Hours</th></tr></thead>
+          <div class="table-wrap"><table class="grid entry">
+            <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
             <tbody id="ts-rows"></tbody>
-            <tfoot><tr><td colspan="4">Total hours</td><td class="num" id="ts-total">0.00</td></tr></tfoot>
           </table></div>
-          <label>Notes (optional)<textarea id="ts-notes" rows="2"></textarea></label>
+          <p class="hint">Hours are figured from time in and time out. Overnight shifts are handled automatically.</p>
+
+          <div class="table-wrap"><table class="grid extras">
+            <tbody>
+              <tr class="total"><th>Total Hours Worked</th><td class="num" id="ts-total">0.00</td><td class="hint">This is the number of hours you actually worked.</td></tr>
+              ${EXTRA_HOURS.map(([k, label, hint]) => `<tr>
+                <th><label for="x-${k}">${esc(label)}</label></th>
+                <td><input type="number" id="x-${k}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
+                <td class="hint">${esc(hint)}</td></tr>`).join('')}
+              ${myDuties.map((d) => `<tr class="duty-row">
+                <th><label for="d-${d.id}">${esc(d.label)}</label> <span class="chip">${esc(d.name)}</span></th>
+                <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
+                <td class="hint">${esc(d.note)}</td></tr>`).join('')}
+              <tr class="total"><th>Total Hours To Be Paid</th><td class="num" id="ts-paid">0.00</td><td></td></tr>
+            </tbody>
+          </table></div>
+          <div id="ts-warn" class="notice warn hidden"></div>
+
           <fieldset class="sign">
-            <legend>Electronic signature</legend>
+            <legend>Employee signature</legend>
+            <p class="sign-statement">${esc(SIGN_STATEMENT)}</p>
             <div class="sig-box">
               <canvas id="sig"></canvas>
               <button type="button" class="btn small" id="sig-clear">Clear</button>
             </div>
             <p class="hint">Sign above with your mouse or finger.</p>
-            <label>Type your full legal name<input id="ts-name" required autocomplete="name"></label>
+            <label>Type your full name<input id="ts-name" required autocomplete="name"></label>
             <label class="check"><input type="checkbox" id="ts-agree">
-              <span>I certify the hours above are true and accurate, and I agree my electronic signature is the legal equivalent of my handwritten signature.</span></label>
+              <span>I agree the time reported is accurate and true, and that my electronic signature is the legal equivalent of my handwritten signature.</span></label>
           </fieldset>
           <button class="btn primary" type="submit" id="ts-submit">Sign &amp; submit</button>
         </form>
@@ -372,61 +473,68 @@
     bindTimesheetButtons(el, mine);
     const pad = createSignaturePad($('#sig'));
     $('#sig-clear').onclick = () => pad.clear();
-    $('#ts-rows').addEventListener('input', recalc);
+    $('#ts-form').addEventListener('input', (e) => { if (!e.target.closest('.sign')) recalc(); });
 
-    const weekInput = $('#ts-week');
+    const periodInput = $('#ts-period');
     let existing = null;
 
-    const loadWeek = () => {
-      const wk = isoDate(mondayOf(weekInput.value ? parseDate(weekInput.value) : new Date()));
-      weekInput.value = wk;
-      existing = mine.find((t) => t.week_start === wk) || null;
+    const loadPeriod = () => {
+      const p = periodInput.value;
+      existing = mine.find((t) => t.period_start === p) || null;
       const note = $('#ts-status'), btn = $('#ts-submit');
       btn.disabled = false;
       note.className = 'notice hidden';
       if (existing) {
         note.className = 'notice';
         if (existing.status === 'approved') {
-          note.textContent = 'This week is already approved and locked.';
+          note.textContent = 'This pay period is already approved and locked.';
           btn.disabled = true;
         } else if (existing.status === 'rejected') {
-          note.innerHTML = `This week was sent back${existing.manager_note ? `: <em>${esc(existing.manager_note)}</em>` : '.'} Fix it and sign again to resubmit.`;
+          note.innerHTML = `This timesheet was sent back${existing.manager_note ? `: <em>${esc(existing.manager_note)}</em>` : '.'} Fix it and sign again to resubmit.`;
         } else {
-          note.textContent = 'You already submitted this week. Submitting again replaces it and requires a new signature.';
+          note.textContent = 'You already submitted this pay period. Submitting again replaces it and needs a new signature.';
         }
       }
-      $('#ts-notes').value = existing?.notes || '';
-      buildRows(wk, existing?.entries || []);
+      buildRows(p, existing?.entries || []);
+      EXTRA_HOURS.forEach(([k]) => { $(`#x-${k}`).value = existing && Number(existing[k]) ? Number(existing[k]) : ''; });
+      myDuties.forEach((d) => {
+        const saved = existing ? (existing.duty_hours || []).find((x) => x.duty_id === d.id) : null;
+        const v = existing ? Number(saved?.hours) || 0 : Number(d.default_hours) || 0;  // new sheet: pre-fill automatic hours
+        $(`#d-${d.id}`).value = v ? v : '';
+      });
+      recalc();
     };
-    weekInput.value = isoDate(mondayOf(new Date()));
-    loadWeek();
-    weekInput.onchange = loadWeek;
+    loadPeriod();
+    periodInput.onchange = loadPeriod;
 
     $('#ts-form').onsubmit = (e) => {
       e.preventDefault();
       withBusy($('#ts-submit'), async () => {
         const entries = [];
-        let total = 0;
         for (const tr of $$('#ts-rows tr')) {
           const i = $('.t-in', tr).value, o = $('.t-out', tr).value;
-          const b = Number($('.t-break', tr).value) || 0;
-          if (!i && !o) continue;
-          if (!i || !o) throw new Error(`Enter both time in and time out for ${tr.dataset.label}.`);
-          const h = calcHours(i, o, b);
-          entries.push({ date: tr.dataset.date, in: i, out: o, break_min: b, hours: round2(h) });
-          total += h;
+          const expl = $('.t-expl', tr).value.trim();
+          if ((i && !o) || (!i && o)) throw new Error(`Enter both time in and time out for ${tr.dataset.label}.`);
+          if (!i && !expl) continue;
+          entries.push({ date: tr.dataset.date, in: i, out: o, hours: round2(calcHours(i, o)), explanation: expl });
         }
-        if (!entries.length) throw new Error('Enter hours for at least one day.');
+        const extras = readExtras();
+        const duty_hours = readDuties();
+        const anyHours = entries.some((x) => x.hours > 0) || Object.values(extras).some((v) => v > 0)
+          || duty_hours.some((d) => d.hours > 0);
+        if (!anyHours) throw new Error('Enter at least one day worked or some vacation, holiday or sick hours.');
         if (pad.isEmpty()) throw new Error('Please sign in the signature box.');
         const name = $('#ts-name').value.trim();
         if (!name) throw new Error('Please type your full name.');
-        if (!$('#ts-agree').checked) throw new Error('Please check the certification box.');
+        if (!$('#ts-agree').checked) throw new Error('Please check the box agreeing the time is accurate.');
 
         const row = {
-          week_start: weekInput.value,
+          period_start: periodInput.value,
           entries,
-          total_hours: round2(total),
-          notes: $('#ts-notes').value.trim() || null,
+          ...extras,
+          duty_hours,
+          traffic_ot_hours: 0,
+          k9_hours: 0,
           signature_data: pad.toDataURL(),
           signed_name: name,
           status: 'submitted'
@@ -441,17 +549,20 @@
     };
   };
 
+  /* ---------------- timesheets: lists & printable sheet ---------------- */
   function timesheetTable(list, mgr) {
     if (!list.length) return '<p class="muted">Nothing here yet.</p>';
     return `<div class="table-wrap"><table class="list">
-      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Week of</th><th class="num">Hours</th><th>Status</th><th>Signed</th><th></th></tr></thead>
+      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Pay period</th><th class="num">Worked</th><th>Special / grant OT</th><th class="num">To be paid</th><th>Status</th><th>Signed</th><th></th></tr></thead>
       <tbody>${list.map((t) => `<tr>
         ${mgr ? `<td>${esc(personName(t.user_id, 'Unknown'))}</td>` : ''}
-        <td>${fmtDate(t.week_start)}</td>
-        <td class="num">${Number(t.total_hours).toFixed(2)}</td>
+        <td>${esc(periodLabel(t.period_start))}</td>
+        <td class="num">${hrs(t.total_hours)}</td>
+        <td>${dutyChips(t) || '<span class="muted">—</span>'}</td>
+        <td class="num">${hrs(t.total_paid_hours)}</td>
         <td>${badge(t.status)}</td>
         <td>${esc(fmtDateTime(t.signed_at))}</td>
-        <td class="right"><button class="btn small" data-ts="${t.id}">${mgr && t.status === 'submitted' ? 'Review' : 'View'}</button></td>
+        <td class="right"><button class="btn small" data-ts="${t.id}">${mgr && t.status === 'submitted' ? 'Review' : 'View / Print'}</button></td>
       </tr>`).join('')}</tbody></table></div>`;
   }
 
@@ -459,6 +570,57 @@
     $$('[data-ts]', el).forEach((b) => {
       b.onclick = () => openTimesheet(list.find((t) => t.id === b.dataset.ts));
     });
+  }
+
+  // The printable form, laid out like the paper Deputies Daily Report
+  function sheetHTML(t) {
+    const sigOk = typeof t.signature_data === 'string' && t.signature_data.startsWith('data:image/png;base64,');
+    const blankIfZero = (v) => Number(v) ? hrs(v) : '';
+    const dayRows = periodDays(t.period_start).map((iso) => {
+      const e = (t.entries || []).find((x) => x.date === iso) || {};
+      return `<tr class="d">
+        <td class="c-date">${esc(fmtShort(iso))}</td>
+        <td class="c">${esc(e.in || '')}</td>
+        <td class="c">${esc(e.out || '')}</td>
+        <td class="c">${e.hours ? hrs(e.hours) : ''}</td>
+        <td class="c-expl">${esc(e.explanation || '')}</td></tr>`;
+    }).join('');
+    const sumRow = (label, value, note, cls = '') =>
+      `<tr class="s ${cls}"><th colspan="3">${esc(label)}</th><td class="c">${value}</td><td class="s-note">${esc(note)}</td></tr>`;
+    const duties = dutyLines(t);
+    const special = duties.filter((d) => d.hours > 0);
+    const compact = duties.length > 3 ? ' compact' : '';
+
+    return `<div class="sheet${compact}">
+      <div class="sheet-head">
+        <div class="org">${esc(ORG)}</div>
+        <div class="title">${esc(REPORT_TITLE)}</div>
+        <div class="emp">${esc(personName(t.user_id, t.signed_name).toUpperCase())}</div>
+        ${special.length ? `<div class="special-flag">SPECIAL / GRANT OT: ${special.map((d) => `${esc(d.name)} ${hrs(d.hours)}`).join(' · ')}</div>` : ''}
+      </div>
+      <table class="sheet-table">
+        <colgroup><col style="width:18%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:11%"><col></colgroup>
+        <thead><tr><th>Date</th><th>Time In</th><th>Time Out</th><th>Total Hours Worked</th><th>Explanation of Overtime or Absences</th></tr></thead>
+        <tbody>
+          ${dayRows}
+          ${sumRow('Total Hours Worked', hrs(t.total_hours), 'This is the number of hours you actually worked.')}
+          ${EXTRA_HOURS.map(([k, label, note]) => sumRow(label, blankIfZero(t[k]), note, k === 'sick_hours' ? 'tall' : '')).join('')}
+          ${duties.map((d) => sumRow(d.label, blankIfZero(d.hours), d.note, d.hours > 0 ? 'duty hl' : 'duty')).join('')}
+          ${sumRow('Total Hours To Be Paid', hrs(t.total_paid_hours), '')}
+        </tbody>
+      </table>
+      <div class="sheet-sign">
+        <div class="red">${esc(SIGN_STATEMENT)}</div>
+        <div class="sig-line">
+          <span class="red">Employee Signature:</span>
+          <span class="sig-space">${sigOk ? `<img src="${t.signature_data}" alt="Signature of ${esc(t.signed_name)}">` : ''}</span>
+        </div>
+        <div class="sig-meta">Electronically signed by ${esc(t.signed_name)} on ${esc(fmtDateTime(t.signed_at))}</div>
+      </div>
+    </div>
+    ${t.status === 'approved' && t.reviewed_at
+      ? `<div class="sheet-after">Approved by ${esc(personName(t.reviewed_by, 'manager'))} on ${esc(fmtDateTime(t.reviewed_at))}${t.manager_note ? ` — ${esc(t.manager_note)}` : ''}</div>`
+      : ''}`;
   }
 
   function reviewInfo(r) {
@@ -469,7 +631,7 @@
   }
 
   function reviewControls(denyLabel) {
-    return `<div class="review">
+    return `<div class="review no-print">
       <label>Note to employee (optional)<textarea id="rv-note" rows="2"></textarea></label>
       <div class="actions">
         <button class="btn primary" id="rv-approve">Approve</button>
@@ -492,31 +654,26 @@
 
   function openTimesheet(t) {
     const canReview = isManager() && t.status === 'submitted';
-    const sigOk = typeof t.signature_data === 'string' && t.signature_data.startsWith('data:image/png;base64,');
-    const rows = (t.entries || []).map((e) => `<tr>
-      <td>${esc(fmtDay(e.date))}</td><td>${esc(e.in)}</td><td>${esc(e.out)}</td>
-      <td class="num">${esc(e.break_min)}</td><td class="num">${Number(e.hours).toFixed(2)}</td></tr>`).join('');
-
     openModal(`
-      <div class="doc">
-        <h2>Timesheet</h2>
-        <p><strong>${esc(personName(t.user_id, 'Employee'))}</strong> · Week of ${fmtDate(t.week_start)} ${badge(t.status)}</p>
-        <div class="table-wrap"><table class="grid">
-          <thead><tr><th>Day</th><th>In</th><th>Out</th><th class="num">Break</th><th class="num">Hours</th></tr></thead>
-          <tbody>${rows}</tbody>
-          <tfoot><tr><td colspan="4">Total hours</td><td class="num">${Number(t.total_hours).toFixed(2)}</td></tr></tfoot>
-        </table></div>
-        ${t.notes ? `<p><strong>Notes:</strong> ${esc(t.notes)}</p>` : ''}
-        <div class="sig-record">
-          ${sigOk ? `<img src="${t.signature_data}" alt="Signature">` : ''}
-          <p>Electronically signed by <strong>${esc(t.signed_name)}</strong><br>${esc(fmtDateTime(t.signed_at))}</p>
-        </div>
-        ${reviewInfo(t)}
+      <div class="modal-head no-print">
+        <strong>${esc(personName(t.user_id, 'Employee'))}</strong> · ${esc(periodLabel(t.period_start))} ${badge(t.status)}
+        ${t.status === 'rejected' && t.manager_note ? `<div class="muted">Sent back: ${esc(t.manager_note)}</div>` : ''}
       </div>
+      <div class="print-area"><div class="sheet-page">${sheetHTML(t)}</div></div>
       ${canReview ? reviewControls('Send back') : ''}
       <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button></div>`);
     $('#print-btn').onclick = () => window.print();
     if (canReview) bindReview('timesheets', t.id, 'rejected');
+  }
+
+  function openManySheets(list, title) {
+    openModal(`
+      <div class="modal-head no-print">
+        <strong>${esc(title)}</strong> · ${list.length} timesheet${list.length === 1 ? '' : 's'}
+        <div class="actions"><button class="btn primary" id="print-btn">Print all</button></div>
+      </div>
+      <div class="print-area">${list.map((t) => `<div class="sheet-page">${sheetHTML(t)}</div>`).join('')}</div>`);
+    $('#print-btn').onclick = () => window.print();
   }
 
   /* ---------------- time off ---------------- */
@@ -615,26 +772,28 @@
   views.review = async (el) => {
     await loadPeople();
     const [ts, to, tsDone, toDone] = await Promise.all([
-      sb.from('timesheets').select('*').eq('status', 'submitted').order('week_start'),
+      sb.from('timesheets').select('*').eq('status', 'submitted').order('period_start'),
       sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date'),
-      sb.from('timesheets').select('*').neq('status', 'submitted').order('week_start', { ascending: false }).limit(25),
+      sb.from('timesheets').select('*').neq('status', 'submitted').order('period_start', { ascending: false }).limit(25),
       sb.from('time_off_requests').select('*').neq('status', 'pending').order('start_date', { ascending: false }).limit(25)
     ]);
     for (const r of [ts, to, tsDone, toDone]) if (r.error) throw r.error;
 
-    const lastMonday = isoDate(addDays(mondayOf(new Date()), -7));
     el.innerHTML = `
       <section class="card"><h2>Timesheets awaiting approval <span class="count">${ts.data.length}</span></h2>
         <div id="ts-pending">${timesheetTable(ts.data, true)}</div></section>
       <section class="card"><h2>Time off awaiting approval <span class="count">${to.data.length}</span></h2>
         <div id="to-pending">${timeOffTable(to.data, true)}</div></section>
-      <section class="card"><h2>Export timesheets for payroll</h2>
+      <section class="card"><h2>Payroll: print or export a pay period</h2>
         <form id="exp" class="row end">
-          <label>From week<input type="date" name="from" value="${lastMonday}" required></label>
-          <label>To week<input type="date" name="to" value="${lastMonday}" required></label>
-          <label>Include<select name="status"><option value="approved">Approved only</option><option value="all">All statuses</option></select></label>
-          <button class="btn" type="submit">Download CSV</button>
-        </form></section>
+          <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
+          <label>Include<select id="exp-status"><option value="approved">Approved only</option><option value="all">All statuses</option></select></label>
+          <label>CSV layout<select id="exp-layout"><option value="summary">One row per person</option><option value="daily">One row per day</option></select></label>
+        </form>
+        <div class="actions">
+          <button class="btn primary" id="exp-print">Print all timesheets</button>
+          <button class="btn" id="exp-csv">Download CSV</button>
+        </div></section>
       <section class="card"><h2>Recent timesheets</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div></section>
       <section class="card"><h2>Recent time off</h2><div id="to-done">${timeOffTable(toDone.data, true)}</div></section>`;
 
@@ -643,48 +802,87 @@
     bindTimeOffButtons($('#to-pending'), to.data);
     bindTimeOffButtons($('#to-done'), toDone.data);
 
-    const exp = $('#exp');
-    exp.onsubmit = (e) => {
-      e.preventDefault();
-      withBusy(exp.querySelector('button'), async () => {
-        const from = isoDate(mondayOf(parseDate(exp.from.value)));
-        const to2 = exp.to.value;
-        let q = sb.from('timesheets').select('*').gte('week_start', from).lte('week_start', to2);
-        if (exp.status.value === 'approved') q = q.eq('status', 'approved');
-        const { data, error } = await q.order('week_start');
-        if (error) throw error;
-        if (!data.length) throw new Error('No timesheets found for that range.');
-        const rows = [['Employee', 'Email', 'Week start', 'Date', 'Time in', 'Time out', 'Break (min)', 'Hours', 'Week total', 'Status', 'Signed by', 'Signed at']];
-        data.sort((a, b) => personName(a.user_id).localeCompare(personName(b.user_id)) || a.week_start.localeCompare(b.week_start));
+    async function fetchPeriod() {
+      const p = $('#exp-period').value;
+      let q = sb.from('timesheets').select('*').eq('period_start', p);
+      if ($('#exp-status').value === 'approved') q = q.eq('status', 'approved');
+      const { data, error } = await q;
+      if (error) throw error;
+      if (!data.length) throw new Error(`No ${$('#exp-status').value === 'approved' ? 'approved ' : ''}timesheets for ${periodLabel(p)}.`);
+      data.sort((a, b) => personName(a.user_id).localeCompare(personName(b.user_id)));
+      return { p, data };
+    }
+
+    $('#exp').onsubmit = (e) => e.preventDefault();
+    $('#exp-print').onclick = (e) => withBusy(e.target, async () => {
+      const { p, data } = await fetchPeriod();
+      openManySheets(data, `Pay period ${periodLabel(p)}`);
+    });
+    $('#exp-csv').onclick = (e) => withBusy(e.target, async () => {
+      const { p, data } = await fetchPeriod();
+      const extraHeads = EXTRA_HOURS.map(([, label]) => label.replace(/^Total /, ''));
+      const extraVals = (t) => EXTRA_HOURS.map(([k]) => Number(t[k] || 0));
+      let rows;
+      if ($('#exp-layout').value === 'summary') {
+        // one column per special duty that shows up in this pay period
+        const dutyNames = [...new Set(data.flatMap((t) => dutyLines(t).filter((d) => d.hours > 0).map((d) => d.name)))];
+        rows = [['Employee', 'Email', 'Period start', 'Period end', 'Hours worked', ...extraHeads, ...dutyNames, 'Total to be paid', 'Status', 'Signed by', 'Signed at']];
+        for (const t of data) {
+          const lines = dutyLines(t);
+          const dutyVals = dutyNames.map((n) => lines.filter((d) => d.name === n).reduce((a, d) => a + d.hours, 0));
+          rows.push([personName(t.user_id), state.people[t.user_id]?.email || '', t.period_start, periodEnd(t.period_start),
+            Number(t.total_hours), ...extraVals(t), ...dutyVals, Number(t.total_paid_hours), t.status, t.signed_name, t.signed_at]);
+        }
+      } else {
+        rows = [['Employee', 'Email', 'Date', 'Time in', 'Time out', 'Hours', 'Explanation', 'Status']];
         for (const t of data) {
           for (const en of t.entries || []) {
-            rows.push([personName(t.user_id), state.people[t.user_id]?.email || '', t.week_start, en.date,
-              en.in, en.out, en.break_min, en.hours, t.total_hours, t.status, t.signed_name, t.signed_at]);
+            rows.push([personName(t.user_id), state.people[t.user_id]?.email || '', en.date,
+              en.in, en.out, en.hours, en.explanation || '', t.status]);
           }
         }
-        downloadCSV(`timesheets_${from}_to_${to2}.csv`, rows);
-      });
-    };
+      }
+      downloadCSV(`timesheets_${p}_to_${periodEnd(p)}.csv`, rows);
+    });
   };
 
-  /* ---------------- manager: team ---------------- */
+  /* ---------------- manager: team & special duties ---------------- */
   views.team = async (el) => {
-    const people = await loadPeople();
+    const [people, duties, assigns] = await Promise.all([loadPeople(), loadDuties(), loadAssignments()]);
+    const has = new Set(assigns.map((a) => `${a.user_id}|${a.duty_id}`));
+    const active = duties.filter((d) => d.active);
+
     el.innerHTML = `
       <section class="card">
         <h2>Team</h2>
-        <p class="muted">To add someone, invite them from your Supabase dashboard: <strong>Authentication → Users → Invite user</strong>. They’ll get an email to set their password, then they can sign in here.</p>
-        <div class="table-wrap"><table class="list">
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
+        <p class="muted">To add someone, invite them from your Supabase dashboard: <strong>Authentication → Users → Invite user</strong>. The name here is what prints at the top of their timesheet. Tick the special duties each person has — only those lines will show on their timesheet.</p>
+        <div class="table-wrap"><table class="list team">
+          <thead><tr><th>Name</th><th>Email</th><th>Special duties</th><th>Role</th><th></th></tr></thead>
           <tbody>${people.map((p) => `<tr data-id="${p.id}">
             <td><input class="p-name" value="${esc(p.full_name)}"></td>
-            <td>${esc(p.email)}</td>
+            <td class="email">${esc(p.email)}</td>
+            <td class="duty-checks">${active.length ? active.map((d) => d.everyone
+              ? `<span class="chip muted-chip" title="Shown on everyone’s timesheet">${esc(d.name)} (all)</span>`
+              : `<label class="chip-check"><input type="checkbox" data-duty="${d.id}" ${has.has(`${p.id}|${d.id}`) ? 'checked' : ''}><span>${esc(d.name)}</span></label>`).join('')
+              : '<span class="muted">None set up</span>'}</td>
             <td><select class="p-role" ${p.id === me() ? 'disabled title="You can’t change your own role"' : ''}>
               <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
               <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
             </select></td>
             <td class="right"><button class="btn small p-save">Save</button></td>
           </tr>`).join('')}</tbody>
+        </table></div>
+      </section>
+
+      <section class="card">
+        <h2>Special duties</h2>
+        <p class="muted">Grant and automatic overtime lines such as K9, DEA or Supervisor. <strong>Timesheet line</strong> and <strong>Note</strong> print on the timesheet. <strong>Auto hours</strong> are filled in for the person each pay period (they can change them). <strong>Everyone</strong> shows the line on every timesheet. Turn off <strong>Active</strong> to retire a duty — past timesheets keep it.</p>
+        <div class="table-wrap"><table class="list duties">
+          <thead><tr><th>Short name</th><th>Timesheet line</th><th>Note</th><th>Auto hours</th><th>Everyone</th><th>Active</th><th></th></tr></thead>
+          <tbody>
+            ${duties.map((d) => dutyRow(d)).join('')}
+            ${dutyRow({ id: '', name: '', label: '', note: '', default_hours: 0, everyone: false, active: true })}
+          </tbody>
         </table></div>
       </section>`;
 
@@ -694,15 +892,64 @@
         const id = tr.dataset.id;
         const update = { full_name: $('.p-name', tr).value.trim() };
         if (id !== me()) update.role = $('.p-role', tr).value;
+        const checks = $$('input[data-duty]', tr);
+        const add = checks.filter((c) => c.checked && !has.has(`${id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
+        const remove = checks.filter((c) => !c.checked && has.has(`${id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
         withBusy(b, async () => {
           if (!update.full_name) throw new Error('Name can’t be empty.');
           const { error } = await sb.from('profiles').update(update).eq('id', id);
           if (error) throw error;
+          if (add.length) {
+            const r = await sb.from('profile_duties').insert(add.map((duty_id) => ({ user_id: id, duty_id })));
+            if (r.error) throw r.error;
+          }
+          if (remove.length) {
+            const r = await sb.from('profile_duties').delete().eq('user_id', id).in('duty_id', remove);
+            if (r.error) throw r.error;
+          }
+          add.forEach((d) => has.add(`${id}|${d}`));
+          remove.forEach((d) => has.delete(`${id}|${d}`));
           if (id === me()) state.profile.full_name = update.full_name;
           toast('Saved.');
           await loadPeople();
         });
       };
     });
+
+    $$('.d-save', el).forEach((b) => {
+      b.onclick = () => {
+        const tr = b.closest('tr');
+        const row = {
+          name: $('.d-name', tr).value.trim(),
+          label: $('.d-label', tr).value.trim(),
+          note: $('.d-note', tr).value.trim(),
+          default_hours: round2(num($('.d-default', tr).value)),
+          everyone: $('.d-everyone', tr).checked,
+          active: $('.d-active', tr).checked
+        };
+        withBusy(b, async () => {
+          if (!row.name) throw new Error('Give the duty a short name, like K9.');
+          if (!row.label) row.label = row.name + ' Hours';
+          const res = tr.dataset.id
+            ? await sb.from('duties').update(row).eq('id', tr.dataset.id)
+            : await sb.from('duties').insert(row);
+          if (res.error) throw res.error.code === '23505' ? new Error('There’s already a duty with that short name.') : res.error;
+          toast(tr.dataset.id ? 'Duty saved.' : 'Duty added.');
+          showView('team');
+        });
+      };
+    });
   };
+
+  function dutyRow(d) {
+    return `<tr data-id="${esc(d.id)}" class="${d.id ? '' : 'new-duty'}">
+      <td><input class="d-name" value="${esc(d.name)}" placeholder="${d.id ? '' : 'New, e.g. DEA'}"></td>
+      <td><input class="d-label" value="${esc(d.label)}" placeholder="e.g. DEA Overtime Hours"></td>
+      <td><input class="d-note" value="${esc(d.note)}" placeholder="Optional"></td>
+      <td><input class="d-default" type="number" min="0" step="0.25" value="${Number(d.default_hours) || ''}" placeholder="0"></td>
+      <td class="center"><input type="checkbox" class="d-everyone" ${d.everyone ? 'checked' : ''}></td>
+      <td class="center"><input type="checkbox" class="d-active" ${d.active ? 'checked' : ''}></td>
+      <td class="right"><button class="btn small ${d.id ? '' : 'primary'} d-save">${d.id ? 'Save' : 'Add'}</button></td>
+    </tr>`;
+  }
 })();

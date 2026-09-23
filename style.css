@@ -134,7 +134,7 @@ dl.details dd { margin: 0; }
 }
 .modal-box {
   position: relative; background: #fff; border-radius: var(--radius);
-  padding: 1.5rem; width: 100%; max-width: 680px; box-shadow: 0 20px 50px rgba(0,0,0,.25);
+  padding: 1.5rem; width: 100%; max-width: 820px; box-shadow: 0 20px 50px rgba(0,0,0,.25);
 }
 .modal-close {
   position: absolute; top: .5rem; right: .75rem; border: 0; background: none;
@@ -151,11 +151,99 @@ dl.details dd { margin: 0; }
 }
 .toast.error { background: var(--danger); }
 
-/* print: only the open timesheet */
+/* timesheet entry form */
+table.entry td.day { white-space: nowrap; }
+table.entry td.day span { display: block; font-size: .78rem; color: var(--muted); }
+table.entry .t-expl { min-width: 200px; }
+table.entry .t-hours { font-weight: 600; min-width: 60px; }
+table.extras th { text-align: left; text-transform: none; letter-spacing: 0; font-size: .92rem; color: var(--text); white-space: nowrap; }
+table.extras th label { margin: 0; font-size: inherit; }
+table.extras input { margin: 0; max-width: 110px; }
+table.extras td.hint { margin: 0; font-size: .8rem; max-width: 360px; }
+table.extras tr.total th, table.extras tr.total td.num { font-weight: 700; font-size: 1rem; }
+table.extras td.num { text-align: left; padding-left: .9rem; }
+.notice.warn { background: #fff6e5; border-color: #f2d49b; }
+.sign-statement { color: #c00000; font-weight: 600; margin: 0 0 .6rem; font-size: .9rem; }
+.modal-head { margin: 0 2rem .9rem 0; }
+.modal-head .actions { margin-top: .5rem; }
+
+/* printable Deputies Daily Report — mirrors the paper form */
+.sheet {
+  font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff;
+  border: 2px solid #000; max-width: 7.5in; margin: 0 auto;
+}
+.sheet-head { text-align: center; padding: 4px 6px 2px; border-bottom: 1.5px solid #000; line-height: 1.15; }
+.sheet-head .org { font-size: 19px; }
+.sheet-head .title { font-size: 15px; }
+.sheet-head .emp { font-size: 15px; font-weight: 700; }
+.sheet-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.sheet-table th, .sheet-table td {
+  border: 1px solid #000; padding: 1px 4px; font-size: 12px; text-transform: none;
+  letter-spacing: 0; color: #000; vertical-align: middle;
+}
+.sheet-table tr > :first-child { border-left: 0; }
+.sheet-table tr > :last-child { border-right: 0; }
+.sheet-table thead th { text-align: center; font-weight: 700; font-size: 11.5px; line-height: 1.1; height: 34px; }
+.sheet-table tr.d td { height: 37px; }
+.sheet-table .c-date { font-size: 15px; padding-left: 8px; }
+.sheet-table .c { text-align: center; font-size: 13px; }
+.sheet-table .c-expl { font-size: 11.5px; line-height: 1.15; overflow-wrap: anywhere; }
+.sheet-table tr.s th { text-align: center; font-size: 12.5px; font-weight: 700; height: 26px; }
+.sheet-table tr.s.tall th { height: 40px; }
+.sheet-table tr.s .c { font-weight: 700; }
+.sheet-table .s-note { text-align: center; font-size: 8.5px; font-weight: 700; line-height: 1.2; }
+.sheet-sign { border-top: 1.5px solid #000; padding: 5px 10px 6px; text-align: center; }
+.sheet-sign .red { color: #e00000; font-weight: 700; font-size: 10.5px; }
+.sig-line { display: flex; align-items: flex-end; justify-content: center; gap: 4px; margin-top: 2px; }
+.sig-space { display: inline-flex; align-items: flex-end; justify-content: center; width: 3.4in; height: 46px; border-bottom: 1px solid #e00000; position: relative; }
+.sig-space img { max-height: 44px; max-width: 100%; mix-blend-mode: multiply; position: relative; top: 6px; }
+.sig-meta { font-size: 8.5px; color: #333; margin-top: 2px; }
+.sheet-after { max-width: 7.5in; margin: 4px auto 0; font: 9px Arial, sans-serif; color: #333; }
+.sheet-page + .sheet-page { margin-top: 1.5rem; }
+
+/* print: only the timesheet(s) in the open window */
+@page { size: letter; margin: 0.45in; }
 @media print {
   body { background: #fff; }
   body > *:not(#modal) { display: none !important; }
-  .modal { position: static; background: none; padding: 0; }
-  .modal-box { box-shadow: none; max-width: none; padding: 0; }
+  .modal { position: static; background: none; padding: 0; overflow: visible; display: block; }
+  .modal-box { box-shadow: none; max-width: none; padding: 0; border-radius: 0; }
   .modal-close, .review, .no-print { display: none !important; }
+  .sheet { max-width: none; }
+  .sheet-page { break-inside: avoid; page-break-inside: avoid; }
+  .sheet-page + .sheet-page { margin-top: 0; break-before: page; page-break-before: always; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* special duties (K9, DEA, Supervisor, grant OT) */
+.chip {
+  display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: .75rem; font-weight: 700;
+  background: #fff1c2; color: #7a4d00; border: 1px solid #f0cf6a; white-space: nowrap;
+}
+.chip.muted-chip { background: #eef0f4; color: var(--muted); border-color: #dde1e8; font-weight: 600; }
+.chip-check { display: inline-flex; align-items: center; gap: 4px; margin: 2px 8px 2px 0; font-weight: 600; font-size: .85rem; white-space: nowrap; cursor: pointer; }
+.chip-check input { width: auto; margin: 0; }
+.duty-checks { min-width: 180px; }
+table.team .p-name { min-width: 150px; }
+table.team td.email { font-size: .88rem; color: var(--muted); }
+table.duties input { margin: 0; }
+table.duties .d-name { min-width: 90px; }
+table.duties .d-label { min-width: 180px; }
+table.duties .d-note { min-width: 180px; }
+table.duties .d-default { width: 80px; }
+table.duties input[type=checkbox] { width: auto; }
+td.center { text-align: center; }
+tr.new-duty td { background: #f7f9ff; }
+table.extras tr.duty-row th, table.extras tr.duty-row td { background: #fffaf0; }
+table.extras tr.duty-row.has-hours th, table.extras tr.duty-row.has-hours td { background: #fff1c2; }
+
+/* special-duty lines on the printed sheet */
+.special-flag {
+  display: inline-block; margin: 2px 0 3px; padding: 1px 8px; border: 1.5px solid #000;
+  font-size: 11px; font-weight: 700; background: #ffe98a;
+}
+.sheet-table tr.s.duty.hl th, .sheet-table tr.s.duty.hl td { background: #ffe98a; }
+.sheet-table tr.s.duty.hl .c { font-size: 14px; }
+.sheet.compact .sheet-table tr.d td { height: 32px; }
+.sheet.compact .sheet-table tr.s th { height: 23px; }
+.sheet.compact .sheet-table tr.s.tall th { height: 36px; }
