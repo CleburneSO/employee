@@ -17,6 +17,11 @@
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
   const PERIOD_ANCHOR = cfg.PAY_PERIOD_START || '2025-06-12';
+  const LOGO = cfg.LOGO === undefined ? 'logo.png' : cfg.LOGO;   // '' = no logo
+  // Logo image; hides itself if the file isn't there
+  const logoImg = (cls) => LOGO
+    ? `<img src="${esc(LOGO)}" alt="${esc(ORG)}" class="${cls}" onerror="this.remove()">`
+    : '';
 
   // Invite and password-reset links land here with the link type in the URL hash.
   // Read it before supabase-js consumes and clears the hash.
@@ -24,7 +29,7 @@
   let mustSetPassword = linkType === 'invite' || linkType === 'recovery';
 
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const state = { session: null, profile: null, view: 'timesheets', people: {}, duties: [] };
+  const state = { session: null, profile: null, view: 'timesheets', people: {}, duties: [], filterUser: '' };
   let loadedUserId = null;
 
   const TIME_OFF_TYPES = [
@@ -251,7 +256,8 @@
   function renderLogin(mode = 'login') {
     const reset = mode === 'reset';
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
-      <h1>${esc(ORG)}</h1>
+      ${logoImg('auth-logo')}
+      <h1 class="auth-org">${esc(ORG)}</h1>
       <p class="muted">${reset ? 'Enter your email and we’ll send you a reset link.' : 'Sign in to your account.'}</p>
       <form id="auth-form">
         <label>Email<input type="email" name="email" required autocomplete="email"></label>
@@ -282,6 +288,7 @@
 
   function renderSetPassword() {
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
+      ${logoImg('auth-logo')}
       <h1>Set your password</h1>
       <p class="muted">Choose a password you’ll use to sign in (at least 8 characters).</p>
       <form id="pw-form">
@@ -308,6 +315,7 @@
 
   function renderNameSetup() {
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
+      ${logoImg('auth-logo')}
       <h1>Welcome!</h1>
       <p class="muted">What’s your full name? This is how it will print on your timesheet.</p>
       <form id="name-form">
@@ -339,7 +347,7 @@
 
     app.innerHTML = `
       <header class="topbar">
-        <div class="brand">${esc(ORG)}</div>
+        <div class="brand">${logoImg('brand-logo')}<span>${esc(ORG)}</span></div>
         <div class="user">
           <span>${esc(state.profile.full_name)}</span>
           <span class="role">${esc(state.profile.role)}</span>
@@ -770,21 +778,37 @@
 
   /* ---------------- manager: approvals ---------------- */
   views.review = async (el) => {
-    await loadPeople();
+    const people = await loadPeople();
+    const who = state.people[state.filterUser] ? state.filterUser : '';
+    state.filterUser = who;
+    // When a person is picked, show only them and their full history
+    const q = (table) => { let x = sb.from(table).select('*'); if (who) x = x.eq('user_id', who); return x; };
+    const recent = (x) => who ? x : x.limit(25);
     const [ts, to, tsDone, toDone] = await Promise.all([
-      sb.from('timesheets').select('*').eq('status', 'submitted').order('period_start'),
-      sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date'),
-      sb.from('timesheets').select('*').neq('status', 'submitted').order('period_start', { ascending: false }).limit(25),
-      sb.from('time_off_requests').select('*').neq('status', 'pending').order('start_date', { ascending: false }).limit(25)
+      q('timesheets').eq('status', 'submitted').order('period_start'),
+      q('time_off_requests').eq('status', 'pending').order('start_date'),
+      recent(q('timesheets').neq('status', 'submitted').order('period_start', { ascending: false })),
+      recent(q('time_off_requests').neq('status', 'pending').order('start_date', { ascending: false }))
     ]);
     for (const r of [ts, to, tsDone, toDone]) if (r.error) throw r.error;
+    const forWho = who ? ` — ${esc(personName(who))}` : '';
 
     el.innerHTML = `
-      <section class="card"><h2>Timesheets awaiting approval <span class="count">${ts.data.length}</span></h2>
+      <section class="card filter-bar">
+        <label>Show person
+          <select id="f-person">
+            <option value="">Everyone</option>
+            ${people.map((p) => `<option value="${p.id}" ${p.id === who ? 'selected' : ''}>${esc(p.full_name || p.email)}</option>`).join('')}
+          </select>
+        </label>
+        ${who ? '<button class="btn" id="f-clear">Show everyone</button>' : ''}
+        <p class="hint">${who ? 'Showing all of this person’s timesheets and time off.' : 'Pick a person to see their full history. Tip: click the list and start typing a name.'}</p>
+      </section>
+      <section class="card"><h2>Timesheets awaiting approval${forWho} <span class="count">${ts.data.length}</span></h2>
         <div id="ts-pending">${timesheetTable(ts.data, true)}</div></section>
-      <section class="card"><h2>Time off awaiting approval <span class="count">${to.data.length}</span></h2>
+      <section class="card"><h2>Time off awaiting approval${forWho} <span class="count">${to.data.length}</span></h2>
         <div id="to-pending">${timeOffTable(to.data, true)}</div></section>
-      <section class="card"><h2>Payroll: print or export a pay period</h2>
+      <section class="card"><h2>Payroll: print or export a pay period${forWho}</h2>
         <form id="exp" class="row end">
           <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
           <label>Include<select id="exp-status"><option value="approved">Approved only</option><option value="all">All statuses</option></select></label>
@@ -794,8 +818,11 @@
           <button class="btn primary" id="exp-print">Print all timesheets</button>
           <button class="btn" id="exp-csv">Download CSV</button>
         </div></section>
-      <section class="card"><h2>Recent timesheets</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div></section>
-      <section class="card"><h2>Recent time off</h2><div id="to-done">${timeOffTable(toDone.data, true)}</div></section>`;
+      <section class="card"><h2>${who ? 'All timesheets' + forWho : 'Recent timesheets'}</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div></section>
+      <section class="card"><h2>${who ? 'All time off' + forWho : 'Recent time off'}</h2><div id="to-done">${timeOffTable(toDone.data, true)}</div></section>`;
+
+    $('#f-person').onchange = (e) => { state.filterUser = e.target.value; showView('review'); };
+    if (who) $('#f-clear').onclick = () => { state.filterUser = ''; showView('review'); };
 
     bindTimesheetButtons($('#ts-pending'), ts.data);
     bindTimesheetButtons($('#ts-done'), tsDone.data);
@@ -805,6 +832,7 @@
     async function fetchPeriod() {
       const p = $('#exp-period').value;
       let q = sb.from('timesheets').select('*').eq('period_start', p);
+      if (who) q = q.eq('user_id', who);
       if ($('#exp-status').value === 'approved') q = q.eq('status', 'approved');
       const { data, error } = await q;
       if (error) throw error;

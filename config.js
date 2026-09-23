@@ -3,15 +3,19 @@
 // by the Row Level Security rules in schema.sql. NEVER put the service_role
 // (secret) key here.
 window.APP_CONFIG = {
-  SUPABASE_URL: 'https://tywkcyehermpttuvkmta.supabase.co',
-  SUPABASE_ANON_KEY: 'sb_publishable_UbA262eQKl-r6EBT1vOS6g_t4mju8Sz',
+  SUPABASE_URL: 'https://YOUR-PROJECT.supabase.co',
+  SUPABASE_ANON_KEY: 'YOUR-ANON-OR-PUBLISHABLE-KEY',
 
   // Printed at the top of every timesheet
   COMPANY_NAME: "CLEBURNE COUNTY SHERIFF'S OFFICE",
   REPORT_TITLE: 'DEPUTIES DAILY REPORT',
 
+  // Logo shown on the sign-in page and in the header. Upload the image to the
+  // repo next to index.html with this exact name (case matters). '' = no logo.
+  LOGO: 'logo.png',
+
   // Pay periods: the first day of any one pay period, and how many days each lasts.
-  // 9/17/2026 + every 14 days (so 9/17/2026 – 9/30/2026 is a pay period).
-  PAY_PERIOD_START: '2025-09-17',
+  // 6/12/2025 + every 14 days (so 9/17/2026 – 9/30/2026 is a pay period).
+  PAY_PERIOD_START: '2025-06-12',
   PAY_PERIOD_DAYS: 14
 };
