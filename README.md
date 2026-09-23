@@ -57,6 +57,16 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - *My Timesheets:* pick the pay period, enter time in/out (overnight shifts are handled) and any explanation for each day, fill in vacation / holiday / sick / traffic OT / K9 hours, sign, type their name, check the box, submit. Totals are figured automatically (and re-checked by the database). They can resubmit (with a new signature) until it's approved. If a manager sends it back, the note shows at the top.
 - *Time Off:* pick type and dates, submit. They can cancel while it's still pending.
 
+**Calendar (everyone; the first tab)**
+- **Announcements** and **Training announcements** at the top (managers post, pin, set "show until", edit or delete).
+- A month **calendar** of trainings, court dates and other events. Managers add events and tag the deputies on them (e.g. who's subpoenaed). Your own events are outlined in red. On a phone, tap a day to see its events.
+- **Coming up**: the next 45 days as a list.
+
+**Off-Duty Jobs (everyone)**
+- Managers post jobs (when, where, pay, number of spots, details).
+- Deputies **request** a job (with an optional note). Managers **approve** or **decline**. A job can't be over-filled. Everyone sees who's approved. Deputies can withdraw, and a manager can undo an approval.
+- Set a job to **Closed** to stop new requests, or **Cancelled** to keep it on record.
+
 **Case Numbers (everyone)**
 - Fill in Date, INTS, Victim/Defendant, A – I/O and Charge (details can be added later) and click **Reserve next case number**. The database hands out the next number (e.g. `202609230934` = reserved 9/23/2026, count 0934), so two people can never get the same one. The count runs all year and restarts at 0001 each January.
 - The log shows 30 numbers per page, newest first, with search by case #, name, charge or initials. **Print log** prints 30 per page like the paper sheet.
@@ -71,9 +81,20 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 ## Good to know
 
 - **Cost:** GitHub Pages is free. Supabase's free tier covers a small team, but free projects **pause after about a week with no activity** — upgrade to the paid plan if people will rely on it daily and you don't want that risk.
-- **Emails:** Supabase's built-in email sender has a low hourly limit meant for testing. If invites or reset emails stop arriving, add your own SMTP (e.g. Resend, SendGrid, or your email provider) under **Authentication → SMTP Settings**.
+- **Emails (required before inviting deputies):** Supabase's built-in email sender only delivers to members of your Supabase team, about 2 per hour, so invites to deputies fail until you connect your own sender under **Authentication → Emails → SMTP Settings** (e.g. Resend or your county email). Branded invite and password-reset emails are in `email-templates.html`: paste them into **Authentication → Emails → Templates**.
 - **E-signatures:** each timesheet stores the drawn signature image, typed name, a certification statement, and a server timestamp, and can't be altered after submission except by the employee re-signing. That covers what's typically expected for e-signatures under the U.S. ESIGN Act, but I'm not a lawyer — check your state's rules on timekeeping records and how long you must keep them.
 - **Backups:** export your tables from Supabase periodically (Table Editor → Export to CSV), especially on the free plan.
 - **Customizing:** time-off types live in both `schema.sql` (the `check` list) and `app.js` (`TIME_OFF_TYPES`) — change both together. Pay periods are set in `config.js` (`PAY_PERIOD_START` = the first day of any pay period, `PAY_PERIOD_DAYS` = 14). The printed header text is `COMPANY_NAME` and `REPORT_TITLE` in `config.js`.
 - **Upgrading from the first version:** run the new `schema.sql` again in the SQL Editor. It keeps your data and adds the new columns.
 - **Total Hours To Be Paid** = hours worked + vacation + holiday + sick + all special-duty hours. If payroll counts any of those differently, change the `total_paid_hours` line in `schema.sql` and the `paid` line in `app.js`.
+
+## Inviting from the site (one-time setup)
+
+Managers can invite people from the **Team** tab (name, email, role → **Send invite**). This needs a small function in Supabase, because sending invites requires Supabase's secret key, which must never be in the website:
+
+1. Supabase → **Edge Functions** → **Deploy a new function** → **Via Editor**.
+2. Name it exactly **`invite-user`**.
+3. Delete the sample code, paste in all of `supabase-invite-function.ts`, and click **Deploy**.
+4. Leave its JWT / "Verify JWT" setting on (the default).
+
+The function only works for signed-in, active managers. The person's name is saved to their profile and can be used in the invite email as `{{ .Data.full_name }}` (the template in `email-templates.html` already does this). You can still invite from the Supabase dashboard too; those invites just won't include a name.

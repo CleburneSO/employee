@@ -29,7 +29,7 @@
   let mustSetPassword = linkType === 'invite' || linkType === 'recovery';
 
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const state = { session: null, profile: null, view: 'timesheets', people: {}, duties: [], filterUser: '', cases: { year: null, q: '', page: 0 } };
+  const state = { session: null, profile: null, view: 'calendar', month: null, dir: {}, people: {}, duties: [], filterUser: '', cases: { year: null, q: '', page: 0 } };
   let loadedUserId = null;
 
   const TIME_OFF_TYPES = [
@@ -352,9 +352,9 @@
   const views = {};
 
   function renderShell() {
-    const tabs = [['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers']];
+    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers'], ['offduty', 'Off-Duty Jobs']];
     if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team']);
-    if (!tabs.some(([k]) => k === state.view)) state.view = 'timesheets';
+    if (!tabs.some(([k]) => k === state.view)) state.view = 'calendar';
 
     app.innerHTML = `
       <header class="topbar">
@@ -365,7 +365,7 @@
           <button id="signout" class="btn-link light">Sign out</button>
         </div>
       </header>
-      <nav class="tabs">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav>
+      <div class="tabs-wrap"><nav class="tabs">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav></div>
       <main id="view"></main>`;
     $('#signout').onclick = () => sb.auth.signOut();
     $$('.tabs button').forEach((b) => { b.onclick = () => showView(b.dataset.view); });
@@ -375,6 +375,7 @@
   async function showView(v) {
     state.view = v;
     $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
+    $('.tabs button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
     const el = $('#view');
     el.innerHTML = '<div class="loading">Loading…</div>';
     try { await views[v](el); }
@@ -414,7 +415,7 @@
         <td>${timeSelect('t-in', e.in || '', 'Time in')}</td>
         <td>${timeSelect('t-out', e.out || '', 'Time out')}</td>
         <td class="num t-hours"></td>
-        <td><input class="t-expl" value="${esc(e.explanation || '')}" placeholder="" aria-label="Explanation"></td>
+        <td><input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (overtime, absence…)" aria-label="Explanation"></td>
       </tr>`;
     }).join('');
   }
@@ -905,6 +906,443 @@
     });
   };
 
+  /* ---------------- shared: names, dates & times ---------------- */
+  async function loadDirectory() {
+    const { data, error } = await sb.rpc('people_directory');
+    if (error) throw error;
+    state.dir = Object.fromEntries((data || []).map((p) => [p.id, p]));
+    return data || [];
+  }
+  const dirName = (id) => state.dir[id]?.full_name || state.people[id]?.full_name || 'Unknown';
+  const fmtTime = (ts) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const fmtWhen = (s, e, allDay) => {
+    const d = new Date(s);
+    const day = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    if (allDay) return `${day} · All day`;
+    if (!e) return `${day} · ${fmtTime(s)}`;
+    const sameDay = isoDate(new Date(s)) === isoDate(new Date(e));
+    return sameDay ? `${day} · ${fmtTime(s)} – ${fmtTime(e)}`
+      : `${day} ${fmtTime(s)} – ${new Date(e).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${fmtTime(e)}`;
+  };
+  const toLocalInput = (ts) => { if (!ts) return ['', '']; const d = new Date(ts); return [isoDate(d), `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`]; };
+  const fromLocalInput = (date, time) => date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
+  const multiline = (s) => esc(s || '').replace(/\n/g, '<br>');
+  const EVENT_KINDS = [['training', 'Training'], ['court', 'Court'], ['other', 'Other']];
+  const kindLabel = (k) => (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1];
+  function peoplePicker(list, selected = new Set()) {
+    return `<div class="people-picker">${list.filter((p) => p.active !== false).map((p) =>
+      `<label class="chip-check"><input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''}><span>${esc(p.full_name || 'Unnamed')}</span></label>`).join('')}</div>`;
+  }
+
+  /* ---------------- calendar & announcements ---------------- */
+  views.calendar = async (el) => {
+    const now = new Date();
+    const m = state.month || new Date(now.getFullYear(), now.getMonth(), 1);
+    state.month = m;
+    const gridStart = addDays(m, -m.getDay());                    // Sunday before the 1st
+    const gridEnd = addDays(gridStart, 42);
+    const soonEnd = addDays(now, 45);
+    const today = isoDate(now);
+
+    const [people, ann, monthEv, soonEv] = await Promise.all([
+      loadDirectory(),
+      sb.from('announcements').select('*').or(`show_until.is.null,show_until.gte.${today}`)
+        .order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(30),
+      sb.from('events').select('*').gte('starts_at', gridStart.toISOString()).lt('starts_at', gridEnd.toISOString()).order('starts_at'),
+      sb.from('events').select('*').gte('starts_at', new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString())
+        .lt('starts_at', soonEnd.toISOString()).order('starts_at').limit(60)
+    ]);
+    for (const r of [ann, monthEv, soonEv]) if (r.error) throw r.error;
+    const allEv = [...new Map([...monthEv.data, ...soonEv.data].map((e) => [e.id, e])).values()];
+    const tags = {};
+    if (allEv.length) {
+      const { data, error } = await sb.from('event_people').select('event_id, user_id').in('event_id', allEv.map((e) => e.id));
+      if (error) throw error;
+      data.forEach((t) => (tags[t.event_id] ||= []).push(t.user_id));
+    }
+    const mine = (e) => (tags[e.id] || []).includes(me());
+    const byDay = {};
+    monthEv.data.forEach((e) => (byDay[isoDate(new Date(e.starts_at))] ||= []).push(e));
+
+    const annCard = (x) => `<article class="ann ${x.pinned ? 'pinned' : ''} ann-${x.kind}">
+        <div class="ann-head">
+          ${x.kind === 'training' ? '<span class="tag tag-training">Training</span>' : ''}${x.pinned ? '<span class="tag tag-pin">Pinned</span>' : ''}
+          <strong>${esc(x.title)}</strong>
+          <span class="muted ann-date">${esc(new Date(x.created_at).toLocaleDateString())}</span>
+          ${isManager() ? `<button class="btn-link small-link" data-ann="${x.id}">Edit</button>` : ''}
+        </div>
+        ${x.body ? `<div class="ann-body">${multiline(x.body)}</div>` : ''}
+      </article>`;
+    const general = ann.data.filter((x) => x.kind === 'general');
+    const training = ann.data.filter((x) => x.kind === 'training');
+    const monthName = m.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+    el.innerHTML = `
+      <div class="two-col">
+        <section class="card">
+          <div class="card-head"><h2>Announcements</h2>${isManager() ? '<button class="btn small primary" id="ann-new">Post announcement</button>' : ''}</div>
+          ${general.length ? general.map(annCard).join('') : '<p class="muted">No announcements right now.</p>'}
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Training announcements</h2>${isManager() ? '<button class="btn small primary" id="ann-new-t">Post training</button>' : ''}</div>
+          ${training.length ? training.map(annCard).join('') : '<p class="muted">No training announcements right now.</p>'}
+        </section>
+      </div>
+
+      <section class="card">
+        <div class="card-head cal-head">
+          <div class="cal-nav">
+            <button class="btn small" id="cal-prev" aria-label="Previous month">‹</button>
+            <h2>${esc(monthName)}</h2>
+            <button class="btn small" id="cal-next" aria-label="Next month">›</button>
+            <button class="btn small" id="cal-today">Today</button>
+          </div>
+          <div class="cal-legend"><span class="ev-dot ev-training"></span>Training <span class="ev-dot ev-court"></span>Court <span class="ev-dot ev-other"></span>Other <span class="ev-dot ev-mine"></span>You're on it</div>
+          ${isManager() ? '<button class="btn small primary" id="ev-new">Add event</button>' : ''}
+        </div>
+        <div class="cal-grid">
+          ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="cal-dow">${d}</div>`).join('')}
+          ${[...Array(42)].map((_, i) => {
+            const d = addDays(gridStart, i); const iso = isoDate(d);
+            const evs = byDay[iso] || [];
+            return `<div class="cal-day ${d.getMonth() !== m.getMonth() ? 'other-month' : ''} ${iso === today ? 'is-today' : ''}" data-day="${iso}">
+              <div class="cal-num">${d.getDate()}</div>
+              ${evs.slice(0, 3).map((e) => `<button class="ev ev-${e.kind} ${mine(e) ? 'ev-is-mine' : ''}" data-ev="${e.id}" title="${esc(e.title)}">${e.all_day ? '' : `<span class="ev-time">${esc(fmtTime(e.starts_at).replace(':00', '').replace(' ', '').toLowerCase())}</span> `}${esc(e.title)}</button>`).join('')}
+              ${evs.length > 3 ? `<button class="ev-more" data-more="${iso}">+${evs.length - 3} more</button>` : ''}
+            </div>`;
+          }).join('')}
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Coming up (next 45 days)</h2>
+        ${soonEv.data.length ? `<ul class="agenda">${soonEv.data.map((e) => `<li class="${mine(e) ? 'is-mine' : ''}">
+            <button class="agenda-item" data-ev="${e.id}">
+              <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
+              <span class="agenda-title">${esc(e.title)}${mine(e) ? ' <span class="tag tag-mine">You</span>' : ''}</span>
+              <span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}${e.location ? ` · ${esc(e.location)}` : ''}</span>
+            </button></li>`).join('')}</ul>` : '<p class="muted">Nothing scheduled.</p>'}
+      </section>`;
+
+    const evById = Object.fromEntries(allEv.map((e) => [e.id, e]));
+    $$('[data-ev]', el).forEach((b) => { b.onclick = () => openEvent(evById[b.dataset.ev], tags[b.dataset.ev] || [], people); });
+    $$('[data-more]', el).forEach((b) => { b.onclick = (ev) => { ev.stopPropagation(); openDay(b.dataset.more, byDay[b.dataset.more], tags, people); }; });
+    // On phones the events are just colored bars, so tapping anywhere in a day opens that day
+    $$('.cal-day', el).forEach((d) => {
+      d.onclick = (ev) => {
+        const evs = byDay[d.dataset.day];
+        if (!evs || !window.matchMedia('(max-width: 760px)').matches) return;
+        ev.preventDefault(); ev.stopPropagation();
+        openDay(d.dataset.day, evs, tags, people);
+      };
+    });
+    $('#cal-prev').onclick = () => { state.month = new Date(m.getFullYear(), m.getMonth() - 1, 1); showView('calendar'); };
+    $('#cal-next').onclick = () => { state.month = new Date(m.getFullYear(), m.getMonth() + 1, 1); showView('calendar'); };
+    $('#cal-today').onclick = () => { state.month = null; showView('calendar'); };
+    if (isManager()) {
+      $('#ann-new').onclick = () => editAnnouncement({ kind: 'general' });
+      $('#ann-new-t').onclick = () => editAnnouncement({ kind: 'training' });
+      $('#ev-new').onclick = () => editEvent({ kind: 'court', starts_at: null }, [], people);
+      $$('[data-ann]', el).forEach((b) => { b.onclick = () => editAnnouncement(ann.data.find((x) => x.id === b.dataset.ann)); });
+      $$('.cal-day', el).forEach((d) => {
+        d.ondblclick = (e) => { if (e.target.closest('.ev')) return; editEvent({ kind: 'court', starts_at: fromLocalInput(d.dataset.day, '09:00') }, [], people); };
+      });
+    }
+  };
+
+  function openDay(iso, evs, tags, people) {
+    openModal(`<h2>${esc(fmtDate(iso))}</h2><ul class="agenda">${evs.map((e) => `<li>
+      <button class="agenda-item" data-ev="${e.id}"><span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
+      <span class="agenda-title">${esc(e.title)}</span><span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</span></button></li>`).join('')}</ul>`);
+    $$('#modal-body [data-ev]').forEach((b) => { b.onclick = () => openEvent(evs.find((e) => e.id === b.dataset.ev), tags[b.dataset.ev] || [], people); });
+  }
+
+  function openEvent(e, tagged, people) {
+    const names = tagged.map(dirName).sort();
+    openModal(`
+      <div class="doc">
+        <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
+        <h2 style="margin-top:.4rem">${esc(e.title)}</h2>
+        <dl class="details">
+          <dt>When</dt><dd>${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</dd>
+          ${e.location ? `<dt>Where</dt><dd>${esc(e.location)}</dd>` : ''}
+          ${names.length ? `<dt>${e.kind === 'court' ? 'Deputies' : 'People'}</dt><dd>${names.map((n) => `<span class="chip ${tagged.includes(me()) && n === dirName(me()) ? '' : 'muted-chip'}">${esc(n)}</span>`).join(' ')}</dd>` : ''}
+          ${e.details ? `<dt>Details</dt><dd>${multiline(e.details)}</dd>` : ''}
+        </dl>
+        ${isManager() ? '<div class="actions"><button class="btn" id="ev-edit">Edit</button></div>' : ''}
+      </div>`);
+    if (isManager()) $('#ev-edit').onclick = () => editEvent(e, tagged, people);
+  }
+
+  function editEvent(e, tagged, people) {
+    const [sd, st] = toLocalInput(e.starts_at);
+    const [ed, et] = toLocalInput(e.ends_at);
+    openModal(`
+      <h2>${e.id ? 'Edit event' : 'Add event'}</h2>
+      <form id="ev-form" autocomplete="off">
+        <div class="row">
+          <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. State v. Smith — Circuit Court"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
+        <div class="row">
+          <label>Date<input type="date" name="sd" required value="${sd}"></label>
+          <label class="time-f">Start time<input type="time" name="st" value="${e.all_day ? '' : st || '09:00'}"></label>
+          <label>End date<input type="date" name="ed" value="${ed}"></label>
+          <label class="time-f">End time<input type="time" name="et" value="${e.all_day ? '' : et}"></label>
+        </div>
+        <label>Location<input name="location" value="${esc(e.location || '')}" placeholder="e.g. Cleburne County Courthouse, Courtroom B"></label>
+        <label>Details<textarea name="details" rows="3">${esc(e.details || '')}</textarea></label>
+        <label>Deputies on this (court subpoena, required training…)</label>
+        ${peoplePicker(people, new Set(tagged))}
+        <div class="actions">
+          <button class="btn primary" type="submit">${e.id ? 'Save' : 'Add to calendar'}</button>
+          ${e.id ? '<button class="btn danger" type="button" id="ev-del">Delete</button>' : ''}
+        </div>
+      </form>`);
+    const f = $('#ev-form');
+    const syncAllDay = () => { $$('.time-f', f).forEach((l) => l.classList.toggle('hidden', f.all_day.checked)); };
+    f.all_day.onchange = syncAllDay; syncAllDay();
+    f.onsubmit = (ev) => {
+      ev.preventDefault();
+      withBusy(f.querySelector('button[type=submit]'), async () => {
+        const allDay = f.all_day.checked;
+        const row = {
+          kind: f.kind.value, title: f.title.value.trim(), all_day: allDay,
+          starts_at: fromLocalInput(f.sd.value, allDay ? '00:00' : f.st.value),
+          ends_at: f.ed.value || (!allDay && f.et.value) ? fromLocalInput(f.ed.value || f.sd.value, allDay ? '23:59' : (f.et.value || f.st.value)) : null,
+          location: f.location.value.trim() || null, details: f.details.value.trim() || null
+        };
+        if (row.ends_at && row.ends_at < row.starts_at) throw new Error('The end is before the start.');
+        let id = e.id;
+        if (id) {
+          const r = await sb.from('events').update({ ...row, updated_at: new Date().toISOString() }).eq('id', id);
+          if (r.error) throw r.error;
+        } else {
+          const r = await sb.from('events').insert({ ...row, created_by: me() }).select('id').single();
+          if (r.error) throw r.error;
+          id = r.data.id;
+        }
+        const want = new Set($$('.people-picker input:checked', f).map((c) => c.value));
+        const had = new Set(tagged);
+        const add = [...want].filter((u) => !had.has(u)), del = [...had].filter((u) => !want.has(u));
+        if (add.length) { const r = await sb.from('event_people').insert(add.map((user_id) => ({ event_id: id, user_id }))); if (r.error) throw r.error; }
+        if (del.length) { const r = await sb.from('event_people').delete().eq('event_id', id).in('user_id', del); if (r.error) throw r.error; }
+        closeModal(); toast('Saved to calendar.');
+        state.month = new Date(new Date(row.starts_at).getFullYear(), new Date(row.starts_at).getMonth(), 1);
+        showView('calendar');
+      });
+    };
+    if (e.id) $('#ev-del').onclick = (btn) => {
+      if (!confirm(`Delete “${e.title}” from the calendar?`)) return;
+      withBusy(btn.target, async () => {
+        const r = await sb.from('events').delete().eq('id', e.id);
+        if (r.error) throw r.error;
+        closeModal(); toast('Deleted.'); showView('calendar');
+      });
+    };
+  }
+
+  function editAnnouncement(x) {
+    openModal(`
+      <h2>${x.id ? 'Edit' : 'Post'} ${x.kind === 'training' ? 'training announcement' : 'announcement'}</h2>
+      <form id="ann-form" autocomplete="off">
+        <div class="row">
+          <label class="narrow-role">Type<select name="kind"><option value="general" ${x.kind === 'general' ? 'selected' : ''}>General</option><option value="training" ${x.kind === 'training' ? 'selected' : ''}>Training</option></select></label>
+          <label>Title<input name="title" required value="${esc(x.title || '')}"></label>
+        </div>
+        <label>Message<textarea name="body" rows="6">${esc(x.body || '')}</textarea></label>
+        <div class="row">
+          <label>Show until (optional)<input type="date" name="show_until" value="${esc(x.show_until || '')}"></label>
+          <label class="check" style="align-self:center"><input type="checkbox" name="pinned" ${x.pinned ? 'checked' : ''}><span>Pin to the top</span></label>
+        </div>
+        <p class="hint">For a training on a specific date, also add it to the calendar with <strong>Add event</strong> → Training.</p>
+        <div class="actions">
+          <button class="btn primary" type="submit">${x.id ? 'Save' : 'Post'}</button>
+          ${x.id ? '<button class="btn danger" type="button" id="ann-del">Delete</button>' : ''}
+        </div>
+      </form>`);
+    const f = $('#ann-form');
+    f.onsubmit = (ev) => {
+      ev.preventDefault();
+      withBusy(f.querySelector('button[type=submit]'), async () => {
+        const row = { kind: f.kind.value, title: f.title.value.trim(), body: f.body.value.trim(),
+          show_until: f.show_until.value || null, pinned: f.pinned.checked };
+        const r = x.id
+          ? await sb.from('announcements').update({ ...row, updated_at: new Date().toISOString() }).eq('id', x.id)
+          : await sb.from('announcements').insert({ ...row, posted_by: me() });
+        if (r.error) throw r.error;
+        closeModal(); toast(x.id ? 'Saved.' : 'Posted.'); showView('calendar');
+      });
+    };
+    if (x.id) $('#ann-del').onclick = (btn) => {
+      if (!confirm('Delete this announcement?')) return;
+      withBusy(btn.target, async () => {
+        const r = await sb.from('announcements').delete().eq('id', x.id);
+        if (r.error) throw r.error;
+        closeModal(); toast('Deleted.'); showView('calendar');
+      });
+    };
+  }
+
+  /* ---------------- off-duty jobs ---------------- */
+  const REQ_LABEL = { requested: 'Requested', approved: 'Approved', declined: 'Declined', withdrawn: 'Withdrawn' };
+  views.offduty = async (el) => {
+    const since = addDays(new Date(), -1).toISOString();
+    const [people, jobsR, reqR] = await Promise.all([
+      loadDirectory(),
+      sb.from('offduty_jobs').select('*').gte('starts_at', since).order('starts_at'),
+      sb.from('offduty_requests').select('*')
+    ]);
+    if (jobsR.error) throw jobsR.error;
+    if (reqR.error) throw reqR.error;
+    const reqs = {};
+    reqR.data.forEach((r) => (reqs[r.job_id] ||= []).push(r));
+    const jobs = jobsR.data;
+    const upcoming = jobs.filter((j) => j.status !== 'cancelled');
+
+    const jobCard = (j) => {
+      const rs = reqs[j.id] || [];
+      const approved = rs.filter((r) => r.status === 'approved');
+      const pending = rs.filter((r) => r.status === 'requested');
+      const mineR = rs.find((r) => r.user_id === me());
+      const full = approved.length >= j.spots;
+      const past = new Date(j.starts_at) < new Date();
+      let action = '';
+      if (!mineR || mineR.status === 'withdrawn') {
+        action = j.status === 'open' && !past ? `<button class="btn primary small" data-req="${j.id}">${full ? 'Request (waitlist)' : 'Request this job'}</button>` : '';
+      } else if (mineR.status === 'requested' || mineR.status === 'approved') {
+        action = `<button class="btn small" data-withdraw="${mineR.id}" data-approved="${mineR.status === 'approved' ? 1 : ''}">Withdraw</button>`;
+      }
+      return `<article class="job ${full ? 'is-full' : ''} ${j.status !== 'open' ? 'is-closed' : ''}">
+        <div class="job-main">
+          <div class="job-title"><strong>${esc(j.title)}</strong>
+            ${j.status === 'closed' ? '<span class="tag">Closed</span>' : ''}${j.status === 'cancelled' ? '<span class="tag tag-danger">Cancelled</span>' : ''}
+            ${mineR && mineR.status !== 'withdrawn' ? `<span class="badge badge-${mineR.status === 'requested' ? 'pending' : mineR.status === 'declined' ? 'denied' : 'approved'}">${REQ_LABEL[mineR.status]}</span>` : ''}</div>
+          <div class="muted">${esc(fmtWhen(j.starts_at, j.ends_at, false))}${j.location ? ` · ${esc(j.location)}` : ''}${j.pay ? ` · <strong class="pay">${esc(j.pay)}</strong>` : ''}</div>
+          ${j.details ? `<div class="job-details">${multiline(j.details)}</div>` : ''}
+          <div class="job-spots"><span class="spots ${full ? 'full' : ''}">${approved.length} of ${j.spots} spot${j.spots === 1 ? '' : 's'} filled</span>
+            ${approved.length ? ` · ${approved.map((r) => `<span class="chip muted-chip">${esc(dirName(r.user_id))}</span>`).join(' ')}` : ''}</div>
+          ${isManager() && pending.length ? `<div class="job-requests"><strong>Requests (${pending.length}):</strong>
+            ${pending.map((r) => `<div class="req-row"><span>${esc(dirName(r.user_id))}${r.note ? ` <span class="muted">— ${esc(r.note)}</span>` : ''} <span class="muted">· ${esc(new Date(r.created_at).toLocaleString())}</span></span>
+              <span><button class="btn small primary" data-decide="${r.id}" data-to="approved" ${full ? 'disabled title="All spots are filled"' : ''}>Approve</button>
+              <button class="btn small danger" data-decide="${r.id}" data-to="declined">Decline</button></span></div>`).join('')}</div>` : ''}
+          ${isManager() && approved.length ? `<div class="job-requests muted-block">${approved.map((r) => `<div class="req-row"><span>✓ ${esc(dirName(r.user_id))}</span><button class="btn-link small-link" data-decide="${r.id}" data-to="requested">Undo approval</button></div>`).join('')}</div>` : ''}
+        </div>
+        <div class="job-actions">${action}${isManager() ? `<button class="btn small" data-editjob="${j.id}">Edit</button>` : ''}</div>
+      </article>`;
+    };
+
+    const myReqs = reqR.data.filter((r) => r.user_id === me() && r.status !== 'withdrawn');
+    const jobById = Object.fromEntries(jobs.map((j) => [j.id, j]));
+
+    el.innerHTML = `
+      <section class="card">
+        <div class="card-head"><h2>Off-duty jobs</h2>${isManager() ? '<button class="btn small primary" id="job-new">Post a job</button>' : ''}</div>
+        <p class="hint">Request a job and a manager will approve who works it. You’ll see “Approved” here once you’re on it.</p>
+        ${upcoming.length ? upcoming.map(jobCard).join('') : '<p class="muted">No off-duty jobs posted right now.</p>'}
+      </section>
+      ${myReqs.length ? `<section class="card"><h2>My requests</h2>
+        <div class="table-wrap"><table class="list"><thead><tr><th>Job</th><th>When</th><th>Status</th></tr></thead><tbody>
+        ${myReqs.filter((r) => jobById[r.job_id]).map((r) => `<tr><td>${esc(jobById[r.job_id].title)}</td><td>${esc(fmtWhen(jobById[r.job_id].starts_at, jobById[r.job_id].ends_at, false))}</td>
+          <td><span class="badge badge-${r.status === 'requested' ? 'pending' : r.status === 'declined' ? 'denied' : 'approved'}">${REQ_LABEL[r.status]}</span></td></tr>`).join('')}
+        </tbody></table></div></section>` : ''}`;
+
+    $$('[data-req]', el).forEach((b) => {
+      b.onclick = () => {
+        const note = prompt('Optional note for the manager (or leave blank):', '');
+        if (note === null) return;
+        withBusy(b, async () => {
+          const existing = (reqs[b.dataset.req] || []).find((r) => r.user_id === me());
+          const r = existing
+            ? await sb.from('offduty_requests').update({ status: 'requested', note: note.trim() || null }).eq('id', existing.id)
+            : await sb.from('offduty_requests').insert({ job_id: b.dataset.req, user_id: me(), note: note.trim() || null });
+          if (r.error) throw r.error;
+          toast('Request sent.'); showView('offduty');
+        });
+      };
+    });
+    $$('[data-withdraw]', el).forEach((b) => {
+      b.onclick = () => {
+        if (!confirm(b.dataset.approved ? 'You’re approved for this job. Withdraw anyway? Let your supervisor know.' : 'Withdraw your request?')) return;
+        withBusy(b, async () => {
+          const r = await sb.from('offduty_requests').update({ status: 'withdrawn' }).eq('id', b.dataset.withdraw);
+          if (r.error) throw r.error;
+          toast('Withdrawn.'); showView('offduty');
+        });
+      };
+    });
+    $$('[data-decide]', el).forEach((b) => {
+      b.onclick = () => withBusy(b, async () => {
+        const r = await sb.from('offduty_requests').update({ status: b.dataset.to }).eq('id', b.dataset.decide);
+        if (r.error) throw r.error;
+        toast(b.dataset.to === 'approved' ? 'Approved.' : b.dataset.to === 'declined' ? 'Declined.' : 'Moved back to requests.');
+        showView('offduty');
+      });
+    });
+    if (isManager()) {
+      $('#job-new').onclick = () => editJob({ spots: 1, status: 'open' });
+      $$('[data-editjob]', el).forEach((b) => { b.onclick = () => editJob(jobById[b.dataset.editjob]); });
+    }
+  };
+
+  function editJob(j) {
+    const [sd, st] = toLocalInput(j.starts_at);
+    const [ed, et] = toLocalInput(j.ends_at);
+    openModal(`
+      <h2>${j.id ? 'Edit off-duty job' : 'Post an off-duty job'}</h2>
+      <form id="job-form" autocomplete="off">
+        <label>Job<input name="title" required value="${esc(j.title || '')}" placeholder="e.g. Football game security — Cleburne County High"></label>
+        <div class="row">
+          <label>Date<input type="date" name="sd" required value="${sd}"></label>
+          <label>Start<input type="time" name="st" required value="${st}"></label>
+          <label>End date<input type="date" name="ed" value="${ed}"></label>
+          <label>End<input type="time" name="et" value="${et}"></label>
+        </div>
+        <div class="row">
+          <label>Location<input name="location" value="${esc(j.location || '')}"></label>
+          <label class="narrow-role">Pay<input name="pay" value="${esc(j.pay || '')}" placeholder="$35/hr"></label>
+          <label class="narrow-role">Spots<input type="number" name="spots" min="1" max="50" required value="${j.spots || 1}"></label>
+        </div>
+        <label>Details<textarea name="details" rows="3" placeholder="Uniform, contact person, parking…">${esc(j.details || '')}</textarea></label>
+        ${j.id ? `<label class="narrow-role">Status<select name="status">
+          <option value="open" ${j.status === 'open' ? 'selected' : ''}>Open for requests</option>
+          <option value="closed" ${j.status === 'closed' ? 'selected' : ''}>Closed (no new requests)</option>
+          <option value="cancelled" ${j.status === 'cancelled' ? 'selected' : ''}>Cancelled</option></select></label>` : ''}
+        <div class="actions">
+          <button class="btn primary" type="submit">${j.id ? 'Save' : 'Post job'}</button>
+          ${j.id ? '<button class="btn danger" type="button" id="job-del">Delete</button>' : ''}
+        </div>
+      </form>`);
+    const f = $('#job-form');
+    f.onsubmit = (ev) => {
+      ev.preventDefault();
+      withBusy(f.querySelector('button[type=submit]'), async () => {
+        const row = {
+          title: f.title.value.trim(), location: f.location.value.trim() || null, pay: f.pay.value.trim() || null,
+          spots: Number(f.spots.value) || 1, details: f.details.value.trim() || null,
+          starts_at: fromLocalInput(f.sd.value, f.st.value),
+          ends_at: f.et.value ? fromLocalInput(f.ed.value || f.sd.value, f.et.value) : null
+        };
+        if (row.ends_at && row.ends_at < row.starts_at) row.ends_at = new Date(new Date(row.ends_at).getTime() + 86400000).toISOString(); // overnight
+        if (f.status) row.status = f.status.value;
+        const r = j.id
+          ? await sb.from('offduty_jobs').update({ ...row, updated_at: new Date().toISOString() }).eq('id', j.id)
+          : await sb.from('offduty_jobs').insert({ ...row, posted_by: me() });
+        if (r.error) throw r.error;
+        closeModal(); toast(j.id ? 'Saved.' : 'Job posted.'); showView('offduty');
+      });
+    };
+    if (j.id) $('#job-del').onclick = (btn) => {
+      if (!confirm('Delete this job and all its requests? (To keep a record, set Status to Cancelled instead.)')) return;
+      withBusy(btn.target, async () => {
+        const r = await sb.from('offduty_jobs').delete().eq('id', j.id);
+        if (r.error) throw r.error;
+        closeModal(); toast('Deleted.'); showView('offduty');
+      });
+    };
+  }
+
   /* ---------------- case numbers ---------------- */
   const CASES_PER_PAGE = 30;
   const KINDS = ['A', 'I/O'];
@@ -1139,8 +1577,19 @@
 
     el.innerHTML = `
       <section class="card">
+        <h2>Invite someone</h2>
+        <form id="invite-form" class="row end" autocomplete="off">
+          <label>Full name<input name="full_name" required placeholder="e.g. Caleb Hill"></label>
+          <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
+          <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
+          <button class="btn primary" type="submit">Send invite</button>
+        </form>
+        <p class="hint">They’ll get an email to set their password. After they’re added, tick their special duties below.</p>
+      </section>
+
+      <section class="card">
         <h2>Team</h2>
-        <p class="muted">To add someone, invite them from your Supabase dashboard: <strong>Authentication → Users → Invite user</strong>. The name here is what prints at the top of their timesheet. Tick the special duties each person has — only those lines will show on their timesheet. When someone leaves, click <strong>Deactivate</strong> (don’t delete them in Supabase — that would lose their records).</p>
+        <p class="muted">The name here is what prints at the top of their timesheet. Tick the special duties each person has — only those lines will show on their timesheet. When someone leaves, click <strong>Deactivate</strong> (don’t delete them in Supabase — that would lose their records).</p>
         <div class="table-wrap"><table class="list team">
           <thead><tr><th>Name</th><th>Email</th><th>Special duties</th><th>Role</th><th></th></tr></thead>
           <tbody>${current.map((p) => `<tr data-id="${p.id}">
@@ -1184,6 +1633,28 @@
           </tbody>
         </table></div>
       </section>`;
+
+    $('#invite-form').onsubmit = (e) => {
+      e.preventDefault();
+      const f = e.target;
+      withBusy(f.querySelector('button'), async () => {
+        const { data, error } = await sb.functions.invoke('invite-user', {
+          body: { email: f.email.value, full_name: f.full_name.value, role: f.role.value,
+                  redirect_to: location.origin + location.pathname }
+        });
+        if (error) {
+          let msg = error.message;
+          try { msg = (await error.context.json()).error || msg; } catch (_) { /* not JSON */ }
+          if (/not found|failed to send|fetch/i.test(msg) && !/email/i.test(msg)) {
+            msg = 'The invite function isn’t set up in Supabase yet (see README: “Inviting from the site”).';
+          }
+          throw new Error(msg);
+        }
+        if (data?.error) throw new Error(data.error);
+        toast(`Invite sent to ${f.email.value}.`);
+        showView('team');
+      });
+    };
 
     $$('.p-save', el).forEach((b) => {
       b.onclick = () => {
