@@ -12,7 +12,7 @@ window.APP_CONFIG = {
 
   // Logo shown on the sign-in page and in the header. Upload the image to the
   // repo next to index.html with this exact name (case matters). '' = no logo.
-  LOGO: 'logo.png',
+  LOGO: 'logo.jpg',
 
   // Pay periods: the first day of any one pay period, and how many days each lasts.
   // 6/12/2025 + every 14 days (so 9/17/2026 – 9/30/2026 is a pay period).
