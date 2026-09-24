@@ -259,7 +259,7 @@ table.extras tr.duty-row.has-hours th, table.extras tr.duty-row.has-hours td { b
 .auth-card:has(.auth-logo) > p.muted { text-align: center; }
 .brand { display: flex; align-items: center; gap: .65rem; }
 .brand-logo { height: 46px; width: auto; display: block; }
-@media (max-width: 520px) { .brand { font-size: .9rem; } .brand-logo { height: 34px; max-width: 70vw; } }
+@media screen and (max-width: 520px) { .brand { font-size: .9rem; } .brand-logo { height: 34px; max-width: 70vw; } }
 
 /* person filter on Approvals */
 .filter-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .75rem 1rem; padding-bottom: .5rem; }
@@ -387,7 +387,7 @@ table.case-log tr.is-void td.case-no { text-decoration: line-through; }
 .req-row:first-of-type { border-top: 0; }
 
 /* ---------- phones & small tablets ---------- */
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   .two-col { grid-template-columns: 1fr; }
   main { margin-top: .75rem; padding: 0 .6rem 2.5rem; }
   .card { padding: 1rem .85rem; border-radius: 8px; }
@@ -453,7 +453,7 @@ table.case-log tr.is-void td.case-no { text-decoration: line-through; }
   .pager #case-print { margin-left: 0; }
   .filter-bar label { flex: 1 1 100%; }
 }
-@media (max-width: 760px) { .cal-day .ev { pointer-events: none; } }
+@media screen and (max-width: 760px) { .cal-day .ev { pointer-events: none; } }
 /* polish */
 .ev-dot.ev-training { background: var(--primary); }
 .ev-dot.ev-court { background: #d18a1d; }
@@ -462,7 +462,7 @@ table.case-log tr.is-void td.case-no { text-decoration: line-through; }
 .agenda-item .tag { justify-self: start; }
 .tabs-wrap { position: relative; background: #fff; border-bottom: 1px solid var(--line); }
 .tabs-wrap .tabs { border-bottom: 0; }
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   .tabs-wrap::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 28px; pointer-events: none;
     background: linear-gradient(to right, rgba(255,255,255,0), #fff); }
   .agenda-item { grid-template-columns: 4.9rem 1fr; }
@@ -488,7 +488,7 @@ tr.from-times input.duty-input { background: #f3f4f6; }
 .sheet-table tr.d.multi .c-date { font-size: 14px; }
 .seg-duty { font-style: italic; }
 .sheet-foot { font-size: 8.5px; padding: 2px 8px; border-top: 1px solid #000; }
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   table.entry tr.seg-extra { padding-top: .2rem; }
   table.entry tr.seg-extra td.day { justify-content: space-between; }
   table.entry td.day { flex-wrap: wrap; }
@@ -498,7 +498,7 @@ tr.from-times input.duty-input { background: #f3f4f6; }
 }
 .sheet.tight .sheet-table tr.d td { height: 30px; }
 .sheet.tight .sheet-table tr.s th { height: 21px; }
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   table.entry tr.is-duty { background: #fff7e0; border-radius: 6px; padding-left: .4rem; padding-right: .4rem; }
   table.entry tr.is-duty td { background: transparent; }
   table.entry tr.seg-first + tr.seg-extra:not(.is-duty), table.entry tr.seg-extra + tr.seg-extra:not(.is-duty) { background: transparent; }
@@ -548,7 +548,7 @@ table.audit-diff td:first-child { font-weight: 600; width: 22%; }
 .cal-num .mine-dot { margin-left: 4px; margin-right: 0; vertical-align: 2px; }
 .ev.ev-is-mine { box-shadow: none; outline: none; font-weight: 700; }
 .ev-dot.ev-mine { display: none; }
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   .cal-legend { gap: .15rem 0; }
   .cal-legend .lg { margin-right: .75rem; }
   .ev.ev-is-mine { outline: none; }
@@ -561,7 +561,7 @@ table.audit-diff td:first-child { font-weight: 600; width: 22%; }
 }
 
 /* ---- phone fixes for forms (iPhone date/time boxes have a built-in minimum width) ---- */
-html, body { max-width: 100%; overflow-x: hidden; }
+@media screen { html, body { max-width: 100%; overflow-x: hidden; } }
 .row > label { min-width: 0; }
 input, select, textarea { max-width: 100%; min-width: 0; }
 input[type="date"], input[type="time"] {
@@ -569,7 +569,7 @@ input[type="date"], input[type="time"] {
 }
 input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value { text-align: left; }
 .modal-box { overflow-x: hidden; }
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   .modal-box .row { gap: 0 .6rem; }
   /* Type / Title / Location etc. take the full width; date & time boxes go two per row */
   .modal-box .row > label { flex: 1 1 100%; }
@@ -584,7 +584,7 @@ input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-dat
   label.check input { width: 1.15rem; height: 1.15rem; flex-shrink: 0; }
   .picker-tools { flex-wrap: wrap; }
 }
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   .modal-box form > .actions .btn { flex: 1 1 auto; }
 }
 
@@ -601,7 +601,7 @@ input[type="date"], input[type="time"] {
 input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value { text-align: left; margin: 0; }
 input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   /* forms: one field per line, dates/times two per line */
   .row { gap: 0 .6rem; }
   .row > label { flex: 1 1 100%; }
@@ -637,9 +637,25 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
   /* first cell of each card reads as its title */
   table.list tr > td:first-child { font-weight: 600; }
 }
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   table.list td { flex-wrap: wrap; }
   table.list td .chip { white-space: nowrap; }
   table.list td:has(.chip) { justify-content: flex-end; gap: .3rem; }
   table.list td:has(.chip)::before { margin-right: auto; }
+}
+
+/* ---- print safety: phone rules never apply, nothing is clipped, one sheet per page ---- */
+@media print {
+  html, body { overflow: visible !important; max-width: none !important; width: auto !important; }
+  #modal, .modal, .modal-box, #modal-body, .print-area { overflow: visible !important; min-height: 0 !important; height: auto !important; }
+  .sheet, .case-sheet { max-width: 100% !important; width: 100% !important; }
+  .sheet-page { break-after: auto; }
+  /* a little shorter than the page so browsers with bigger margins still fit it on one sheet */
+  .sheet-table tr.d td { height: 33px; }
+  .sheet.compact .sheet-table tr.d td { height: 30px; }
+  .sheet.tight .sheet-table tr.d td { height: 28px; }
+  .sheet-table tr.s th { height: 22px; }
+  .case-sheet td { height: 28px; font-size: 13.5px; }
+  .case-sheet td.sm { font-size: 11px; }
+  .case-sheet th { font-size: 13px; padding-bottom: 3px; }
 }
