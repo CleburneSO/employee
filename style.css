@@ -540,3 +540,106 @@ table.audit-diff td:first-child { font-weight: 600; width: 22%; }
 .ev-dot.ev-holiday { background: #8e3a9d; }
 .tag-holiday { background: #f3e3f5; color: #5b1f66; }
 .holiday-note { background: #f7eef9; border-color: #e2c6e8; }
+
+/* calendar markers: solid colors + red dot for "you're on it" */
+.cal-legend .lg { display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; margin-right: .6rem; }
+.cal-legend .ev-dot { margin-left: 0; }
+.mine-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #c23434; flex-shrink: 0; vertical-align: middle; margin-right: 3px; }
+.cal-num .mine-dot { margin-left: 4px; margin-right: 0; vertical-align: 2px; }
+.ev.ev-is-mine { box-shadow: none; outline: none; font-weight: 700; }
+.ev-dot.ev-mine { display: none; }
+@media (max-width: 760px) {
+  .cal-legend { gap: .15rem 0; }
+  .cal-legend .lg { margin-right: .75rem; }
+  .ev.ev-is-mine { outline: none; }
+  .ev .mine-dot { display: none; }
+  .ev { height: 7px; border-radius: 3px; }
+  .ev-training { background: var(--primary); }
+  .ev-court { background: #d18a1d; }
+  .ev-holiday { background: #8e3a9d; }
+  .ev-other { background: #6c7a92; }
+}
+
+/* ---- phone fixes for forms (iPhone date/time boxes have a built-in minimum width) ---- */
+html, body { max-width: 100%; overflow-x: hidden; }
+.row > label { min-width: 0; }
+input, select, textarea { max-width: 100%; min-width: 0; }
+input[type="date"], input[type="time"] {
+  -webkit-appearance: none; appearance: none; min-height: 2.6rem; text-align: left; background: #fff;
+}
+input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value { text-align: left; }
+.modal-box { overflow-x: hidden; }
+@media (max-width: 760px) {
+  .modal-box .row { gap: 0 .6rem; }
+  /* Type / Title / Location etc. take the full width; date & time boxes go two per row */
+  .modal-box .row > label { flex: 1 1 100%; }
+  .modal-box .row > label:has(input[type="date"]), .modal-box .row > label:has(input[type="time"]),
+  .modal-box .row > label.time-f { flex: 1 1 calc(50% - .3rem); }
+  .modal-box .row > label.narrow-role { flex: 1 1 100%; }
+  .modal-box h2 { padding-right: 2.2rem; }
+  .people-picker { max-height: 220px; }
+  .people-picker .chip-check { flex: 1 1 45%; padding: .35rem 0; font-size: .95rem; }
+  .people-picker .chip-check input { width: 1.1rem; height: 1.1rem; }
+  label.check { font-size: .95rem; }
+  label.check input { width: 1.15rem; height: 1.15rem; flex-shrink: 0; }
+  .picker-tools { flex-wrap: wrap; }
+}
+@media (max-width: 760px) {
+  .modal-box form > .actions .btn { flex: 1 1 auto; }
+}
+
+/* ================= phone pass: nothing wider than the screen ================= */
+*, *::before, *::after { box-sizing: border-box; }
+label, .row > *, .card, .modal-box, main, table, td, th { min-width: 0; }
+input, select, textarea { width: 100%; max-width: 100%; min-width: 0; }
+input[type="checkbox"], input[type="radio"] { width: auto; }
+/* iPhone Safari gives date/time boxes a built-in width; these lines make them obey the column */
+input[type="date"], input[type="time"] {
+  display: block; width: 100%; max-width: 100%; min-width: 0;
+  -webkit-appearance: none; appearance: none; min-height: 2.6rem; line-height: 1.3;
+}
+input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value { text-align: left; margin: 0; }
+input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
+
+@media (max-width: 760px) {
+  /* forms: one field per line, dates/times two per line */
+  .row { gap: 0 .6rem; }
+  .row > label { flex: 1 1 100%; }
+  .row > label:has(input[type="date"]), .row > label:has(input[type="time"]), .row > label.time-f { flex: 1 1 calc(50% - .3rem); }
+  .row.end .btn { flex: 1 1 auto; }
+  .actions .btn { flex: 1 1 auto; }
+
+  /* tables -> stacked cards */
+  .table-wrap { margin: 0 0 1rem; padding: 0; overflow: visible; }
+  table.list { border: 0; }
+  table.list thead { display: none; }
+  table.list, table.list tbody, table.list tr, table.list td { display: block; width: 100%; }
+  table.list tr { border: 1px solid var(--line); border-radius: 8px; padding: .45rem .75rem; margin-bottom: .6rem; background: #fff; }
+  table.list tr.is-void { background: #fafbfc; }
+  table.list td { display: flex; justify-content: space-between; align-items: center; gap: .75rem; border: 0; padding: .3rem 0;
+    white-space: normal !important; text-align: right; font-size: .95rem; max-width: none; }
+  table.list td::before { content: attr(data-label); flex: 0 0 auto; max-width: 45%; text-align: left; font-size: .72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+  table.list td[data-label=""]::before { content: none; }
+  table.list td[data-label=""] { justify-content: flex-end; padding-top: .45rem; }
+  table.list td.right { justify-content: flex-end; }
+  table.list td.right[data-label=""] .btn { flex: 1 1 auto; }
+  table.list td > input, table.list td > select { flex: 1 1 auto; max-width: 62%; text-align: left; }
+  table.list td.duty-checks { flex-wrap: wrap; justify-content: flex-start; text-align: left; }
+  table.list td.duty-checks::before { flex-basis: 100%; max-width: none; }
+  table.list td.note { color: var(--muted); }
+  table.list td.case-no { font-size: 1.05rem; }
+  /* audit log details row */
+  table.list tr.audit-detail { padding: .4rem; background: #fafbfc; }
+  table.list tr.audit-detail > td { display: block; text-align: left; }
+  table.audit-diff td, table.audit-diff th { padding: .35rem .4rem; }
+  .audit-what { min-width: 0; text-align: left !important; }
+  /* first cell of each card reads as its title */
+  table.list tr > td:first-child { font-weight: 600; }
+}
+@media (max-width: 760px) {
+  table.list td { flex-wrap: wrap; }
+  table.list td .chip { white-space: nowrap; }
+  table.list td:has(.chip) { justify-content: flex-end; gap: .3rem; }
+  table.list td:has(.chip)::before { margin-right: auto; }
+}
