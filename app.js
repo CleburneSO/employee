@@ -1286,7 +1286,7 @@
       <form id="ev-form" autocomplete="off">
         <div class="row">
           <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. Training, Court, Meeting.."></label>
+          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court"></label>
         </div>
         <label class="check not-holiday"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
         <div class="holiday-only notice"><label style="margin:0">Paid holiday hours<input type="number" name="holiday_hours" min="0" max="24" step="0.25" value="${e.holiday_hours ?? 8}" style="max-width:110px"></label>
@@ -1306,7 +1306,8 @@
         ${peoplePicker(people, new Set(tagged))}
         <p class="hint" id="ev-vis"></p>
         </div>
-        <label class="check"><input type="checkbox" name="email_people" checked><span>Email the deputies on this (when added, or if the time or place changes)</span></label>
+        <label class="check not-everyone-email"><input type="checkbox" name="email_people" checked><span>Email the deputies on this (when added, or if the time or place changes)</span></label>
+        <label class="check everyone-email"><input type="checkbox" name="email_all" checked><span><strong>Email everyone about this</strong> (when added, or if the date, time or place changes)</span></label>
         <div class="actions">
           <button class="btn primary" type="submit">${e.id ? 'Save' : 'Add to calendar'}</button>
           ${e.id ? '<button class="btn danger" type="button" id="ev-del">Delete</button>' : ''}
@@ -1319,7 +1320,7 @@
       $$('.holiday-only', f).forEach((x) => x.classList.toggle('hidden', !isHoliday()));
       $$('.not-holiday', f).forEach((x) => x.classList.toggle('hidden', isHoliday()));
       if (isHoliday() && !f.title.value.trim()) f.title.placeholder = 'e.g. Labor Day';
-      syncAllDay();
+      syncAllDay();   // (changing Type also fires the form's change event, which refreshes the email boxes)
     };
     f.all_day.onchange = syncAllDay; f.kind.addEventListener('change', syncKind); syncKind();
     $$('[data-pick]', f).forEach((b) => {
@@ -1329,6 +1330,9 @@
       };
     });
     const syncVis = () => {
+      const all = f.for_everyone.checked && !isHoliday();   // paid holidays never email
+      $$('.everyone-email', f).forEach((x) => x.classList.toggle('hidden', !all));
+      $$('.not-everyone-email', f).forEach((x) => x.classList.toggle('hidden', isHoliday() || (all && !$$('.people-picker input:checked', f).length)));
       const n = $$('.people-picker input:checked', f).length;
       $('.picker-count', f).textContent = `${n} of ${$$('.people-picker input', f).length} selected`;
       $('#ev-vis').textContent = f.for_everyone.checked ? 'Everyone will see this on their calendar.'
@@ -1362,10 +1366,16 @@
         const add = [...want].filter((u) => !had.has(u)), del = [...had].filter((u) => !want.has(u));
         if (add.length) { const r = await sb.from('event_people').insert(add.map((user_id) => ({ event_id: id, user_id }))); if (r.error) throw r.error; }
         if (del.length) { const r = await sb.from('event_people').delete().eq('event_id', id).in('user_id', del); if (r.error) throw r.error; }
-        if (f.email_people.checked && !isHoliday()) {
+        const moved = e.id && (row.starts_at !== new Date(e.starts_at).toISOString() || (row.ends_at || null) !== (e.ends_at ? new Date(e.ends_at).toISOString() : null)
+          || row.all_day !== !!e.all_day || (row.location || null) !== (e.location || null));
+        if (isHoliday()) {
+          // paid holidays: no emails
+        } else if (row.for_everyone && f.email_all.checked) {
+          // everyone gets it (this covers the tagged deputies too, so no second email)
+          if (!e.id || !e.for_everyone) notify('event_tagged', id, { everyone: true });   // new, or just switched to "everyone"
+          else if (moved) notify('event_changed', id, { everyone: true });
+        } else if (f.email_people.checked && !isHoliday()) {
           if (add.length) notify('event_tagged', id, { user_ids: add });
-          const moved = e.id && (row.starts_at !== new Date(e.starts_at).toISOString() || (row.ends_at || null) !== (e.ends_at ? new Date(e.ends_at).toISOString() : null)
-            || row.all_day !== !!e.all_day || (row.location || null) !== (e.location || null));
           if (moved && [...want].some((u) => had.has(u))) notify('event_changed', id, { exclude_ids: add });
         }
         closeModal(); toast('Saved to calendar.');
@@ -1374,9 +1384,11 @@
       });
     };
     if (e.id) $('#ev-del').onclick = (btn) => {
-      if (!confirm(`Delete “${e.title}” from the calendar?${tagged.length ? ' The deputies on it will be emailed that it was removed.' : ''}`)) return;
+      if (!confirm(`Delete “${e.title}” from the calendar?`)) return;
+      const tellAll = e.for_everyone && e.kind !== 'holiday' && confirm('Email everyone that it was removed?\n\nOK = email everyone · Cancel = delete without emailing');
       withBusy(btn.target, async () => {
-        if (tagged.length) await notify('event_deleted', e.id);
+        if (tellAll) await notify('event_deleted', e.id, { everyone: true });
+        else if (tagged.length && !e.for_everyone && e.kind !== 'holiday') await notify('event_deleted', e.id);
         const r = await sb.from('events').delete().eq('id', e.id);
         if (r.error) throw r.error;
         closeModal(); toast('Deleted.'); showView('calendar');
@@ -1951,7 +1963,7 @@
       <section class="card">
         <h2>Invite someone</h2>
         <form id="invite-form" class="row end" autocomplete="off">
-          <label>Full name<input name="full_name" required placeholder="e.g. John Smith"></label>
+          <label>Full name<input name="full_name" required placeholder="e.g. Caleb Hill"></label>
           <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
           <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
           <button class="btn primary" type="submit">Send invite</button>
