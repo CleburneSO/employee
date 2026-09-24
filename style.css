@@ -709,6 +709,40 @@ fieldset.person-set .duty-checks { margin-bottom: .7rem; }
   .team-filter label { flex: 1 1 140px; }
 }
 
+/* ---------------- compact timesheet entry ---------------- */
+table.entry td { padding-top: .22rem; padding-bottom: .22rem; }
+table.entry select, table.entry input { padding-top: .32rem; padding-bottom: .32rem; margin-top: 0; }
+table.entry td.day { white-space: nowrap; }
+table.entry td.day > * { vertical-align: middle; }
+table.entry td.day .d-date { display: inline-block; min-width: 4.6em; }
+table.entry td.day .d-wd { display: inline; font-size: .8rem; color: var(--muted); }
+table.entry .add-seg, table.entry .del-seg {
+  display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; margin-left: .3rem;
+  padding: 0; border: 1px solid #cfd4dc; border-radius: 99px; background: #fff; font-size: 1rem; line-height: 1; }
+table.entry .del-seg { font-size: .8rem; }
+table.entry .add-seg:hover { background: #f1f5ec; border-color: var(--primary); }
+table.entry td.day .seg-more { display: inline-block; min-width: 4.6em; font-size: .8rem; }
+table.entry .t-expl { min-width: 180px; }
+table.extras th, table.extras td { padding-top: .35rem; padding-bottom: .35rem; }
+table.extras input { padding-top: .32rem; padding-bottom: .32rem; margin-top: 0; }
+.sig-box canvas { height: 120px; }
+@media screen and (max-width: 760px) {
+  /* each day: date + · in · out · hours on one line, type + explanation on the next */
+  table.entry tr { grid-template-columns: 4.3rem 1fr 1fr 2rem; gap: .3rem .35rem; padding: .35rem 0; align-items: center; }
+  table.entry td.day { grid-column: auto; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: .2rem; flex-wrap: nowrap; }
+  table.entry td.day .d-date { min-width: 0; font-size: .85rem; line-height: 1.1; }
+  table.entry td.day .d-wd { display: block; font-size: .72rem; }
+  table.entry td.day .add-seg, table.entry td.day .del-seg { margin: 0; width: 1.7rem; height: 1.7rem; font-size: 1rem; flex: 0 0 auto; }
+  table.entry td.day .seg-more { min-width: 0; font-size: 0; }
+  table.entry .seg-more::before { content: '↳'; font-size: 1rem; color: var(--muted); }
+  table.entry tr.seg-extra { padding-top: .35rem; }
+  table.entry tr.seg-extra td.day { justify-content: space-between; }
+  table.entry .t-hours { min-width: 0; font-size: .95rem; }
+  table.entry select.t-in, table.entry select.t-out { padding-left: .35rem; padding-right: .1rem; }
+  table.entry .t-expl, table.entry .t-type { padding-top: .35rem; padding-bottom: .35rem; }
+  .sig-box canvas { height: 130px; }
+}
+
 /* ---- print safety: phone rules never apply, nothing is clipped, one sheet per page ---- */
 @media print {
   html, body { overflow: visible !important; max-width: none !important; width: auto !important; }
