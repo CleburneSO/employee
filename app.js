@@ -302,7 +302,7 @@
   }
 
   async function loadPeople() {
-    const { data, error } = await sb.from('profiles').select('id, full_name, email, role, active, deactivated_at').order('full_name');
+    const { data, error } = await sb.from('profiles').select('id, full_name, email, role, active, deactivated_at, patrol, shift, is_supervisor, reports_to').order('full_name');
     if (error) throw error;
     state.people = Object.fromEntries(data.map((p) => [p.id, p]));
     return data;
@@ -423,7 +423,9 @@
   const views = {};
 
   function renderShell() {
-    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers'], ['offduty', 'Off-Duty Jobs']];
+    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers']];
+    if (canSeeStats()) tabs.push(['stats', 'Stats']);
+    tabs.push(['offduty', 'Off-Duty Jobs']);
     if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team'], ['audit', 'Audit Log']);
     if (!tabs.some(([k]) => k === state.view)) state.view = 'calendar';
 
@@ -1826,12 +1828,247 @@
     });
   }
 
+  /* ---------------- patrol stats ---------------- */
+  // Typed in at the end of each shift. I/O reports are counted from case numbers.
+  const STAT_TYPED = [
+    ['felony_warrants', 'Felony warrants', 'served'],
+    ['misd_warrants', 'Misd. / traffic warrants', 'served'],
+    ['civil_papers', 'Civil papers', 'served'],
+    ['felony_arrests', 'On-view arrests', 'felony'],
+    ['misd_arrests', 'On-view arrests', 'misdemeanor']
+  ];
+  const STAT_ALL = [...STAT_TYPED, ['io_reports', 'I/O reports', 'from case numbers']];
+  const STAT_SHORT = {
+    felony_warrants: 'Fel. warrants', misd_warrants: 'Misd./traffic warr.', civil_papers: 'Civil papers',
+    felony_arrests: 'Fel. arrests', misd_arrests: 'Misd. arrests', io_reports: 'I/Os'
+  };
+  const SHIFTS = ['A', 'B'];
+  const canSeeStats = () => isManager() || !!state.profile?.patrol || !!state.profile?.is_supervisor;
+  const statTotal = (r) => STAT_ALL.reduce((a, [k]) => a + (Number(r?.[k]) || 0), 0);
+  const monthIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+  const addMonths = (iso, n) => { const d = parseDate(iso); return monthIso(new Date(d.getFullYear(), d.getMonth() + n, 1)); };
+  const monthName = (iso, withYear = true) => parseDate(iso).toLocaleDateString(undefined, withYear ? { month: 'long', year: 'numeric' } : { month: 'long' });
+
+  function statsHeadCells() { return STAT_ALL.map(([k]) => `<th class="num">${esc(STAT_SHORT[k])}</th>`).join('') + '<th class="num">Total</th>'; }
+  function statsCells(r) { return STAT_ALL.map(([k]) => `<td class="num">${Number(r[k]) || 0}</td>`).join('') + `<td class="num"><strong>${statTotal(r)}</strong></td>`; }
+
+  views.stats = async (el) => {
+    if (!canSeeStats()) { el.innerHTML = '<div class="card"><p class="muted">Stats are for patrol deputies.</p></div>'; return; }
+    const st = state.stats || (state.stats = {});
+    const thisMonth = monthIso(new Date());
+    st.month = st.month || thisMonth;
+    st.date = st.date || localToday();
+    const month = st.month;
+    const patrol = !!state.profile.patrol;
+    const sup = !!state.profile.is_supervisor;
+    const mgr = isManager();
+    const rpc = async (name, m) => { const { data, error } = await sb.rpc(name, { p_month: m }); if (error) throw error; return data || []; };
+    const [cur, prev, prev2, shifts, logged] = await Promise.all([
+      rpc('patrol_stats_month', month),
+      patrol ? rpc('patrol_stats_month', addMonths(month, -1)) : [],
+      patrol ? rpc('patrol_stats_month', addMonths(month, -2)) : [],
+      rpc('patrol_shift_totals', month),
+      patrol ? sb.from('patrol_stats').select('*').eq('user_id', me()).gte('shift_date', month).lt('shift_date', addMonths(month, 1))
+        .order('shift_date', { ascending: false }).then(({ data, error }) => { if (error) throw error; return data; }) : []
+    ]);
+    const mine = (list) => list.find((r) => r.user_id === me()) || {};
+    const myCur = mine(cur), myPrev = mine(prev);
+    const months = [...Array(12)].map((_, i) => addMonths(thisMonth, -i));
+    const nameOf = (id) => cur.find((r) => r.user_id === id)?.full_name || personName(id, '');
+    const byTotal = (a, b) => statTotal(b) - statTotal(a) || String(a.full_name).localeCompare(b.full_name);
+    const underMe = cur.filter((r) => r.reports_to === me()).sort(byTotal);
+    const everyone = [...cur].sort(byTotal);
+    const myShift = state.profile.shift;
+
+    const tiles = STAT_ALL.map(([k, label, sub]) => {
+      const a = Number(myCur[k]) || 0, b = Number(myPrev[k]) || 0, d = a - b;
+      return `<div class="stat-tile stat-${k}">
+        <div class="stat-label">${esc(k === 'felony_arrests' || k === 'misd_arrests' ? `${label} (${sub})` : label)}</div>
+        <div class="stat-value">${a}</div>
+        <div class="stat-diff ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${d > 0 ? '▲ ' + d : d < 0 ? '▼ ' + -d : 'same'} vs ${esc(monthName(addMonths(month, -1), false))}</div>
+      </div>`;
+    }).join('');
+
+    const deputyTable = (rows, showSup) => rows.length ? `<div class="table-wrap"><table class="list stats-table">
+      <thead><tr><th>Deputy</th><th>Shift</th>${showSup ? '<th>Supervisor</th>' : ''}${statsHeadCells()}</tr></thead>
+      <tbody>${rows.map((r) => `<tr class="${r.user_id === me() ? 'is-me' : ''}"><td>${esc(r.full_name)}${r.active === false ? ' <span class="muted">(deactivated)</span>' : ''}</td>
+        <td>${esc(r.usual_shift || '—')}</td>${showSup ? `<td>${esc(r.reports_to ? nameOf(r.reports_to) : '—')}</td>` : ''}${statsCells(r)}</tr>`).join('')}</tbody>
+    </table></div>` : '<p class="muted">No one to show yet.</p>';
+
+    el.innerHTML = `
+      <div class="stats-top">
+        <h1>Stats</h1>
+        <label class="stats-month">Month<select id="st-month">${months.map((m) => `<option value="${m}" ${m === month ? 'selected' : ''}>${esc(monthName(m))}</option>`).join('')}</select></label>
+      </div>
+
+      ${patrol ? `<section class="card">
+        <h2>Log my shift</h2>
+        <form id="st-form" autocomplete="off">
+          <div class="row">
+            <label>Shift date<input type="date" name="shift_date" value="${esc(st.date)}" max="${esc(isoDate(addDays(new Date(), 1)))}" required></label>
+            <label>Shift worked<select name="shift">${SHIFTS.map((s) => `<option value="${s}">${s} Shift</option>`).join('')}</select></label>
+          </div>
+          <div class="stat-counters">
+            ${STAT_TYPED.map(([k, label, sub]) => `<div class="stat-counter">
+              <div class="stat-counter-label">${esc(label)}<small>${esc(sub)}</small></div>
+              <div class="stepper">
+                <button type="button" class="btn small st-step" data-k="${k}" data-d="-1" aria-label="One fewer ${esc(label)} ${esc(sub)}">−</button>
+                <input type="number" name="${k}" min="0" max="99" step="1" inputmode="numeric" value="0" aria-label="${esc(label)} ${esc(sub)}">
+                <button type="button" class="btn small st-step" data-k="${k}" data-d="1" aria-label="One more ${esc(label)} ${esc(sub)}">+</button>
+              </div>
+            </div>`).join('')}
+            <div class="stat-counter auto">
+              <div class="stat-counter-label">I/O reports<small>counted from your case numbers <span class="auto-tag">Auto</span></small></div>
+              <div class="stat-auto-value" id="st-io">…</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit" id="st-save">Save shift</button>
+            <span class="hint" id="st-note"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>My ${esc(monthName(month))}</h2>
+        <div class="stat-tiles">${tiles}</div>
+        <p class="hint">Numbers count toward the shift you worked. To fix an I/O count, fix the case number (void it or change A – I/O).</p>
+      </section>
+
+      <section class="card">
+        <h2>My last 3 months</h2>
+        <div class="table-wrap"><table class="list stats-table">
+          <thead><tr><th>Month</th>${statsHeadCells()}</tr></thead>
+          <tbody>${[[month, myCur], [addMonths(month, -1), myPrev], [addMonths(month, -2), mine(prev2)]].map(([m, r]) =>
+            `<tr><td>${esc(monthName(m))}</td>${statsCells(r)}</tr>`).join('')}</tbody>
+        </table></div>
+      </section>
+
+      <section class="card">
+        <h2>Shifts I logged in ${esc(monthName(month, false))} <span class="count muted-count">${logged.length}</span></h2>
+        ${logged.length ? `<div class="table-wrap"><table class="list stats-table">
+          <thead><tr><th>Date</th><th>Shift</th>${STAT_TYPED.map(([k]) => `<th class="num">${esc(STAT_SHORT[k])}</th>`).join('')}<th></th></tr></thead>
+          <tbody>${logged.map((r) => `<tr data-date="${esc(r.shift_date)}" data-id="${esc(r.id)}"><td>${esc(fmtDay(r.shift_date))} ${esc(fmtShort(r.shift_date))}</td><td>${esc(r.shift)}</td>
+            ${STAT_TYPED.map(([k]) => `<td class="num">${Number(r[k]) || 0}</td>`).join('')}
+            <td class="right nowrap"><button class="btn small st-edit">Edit</button><button class="btn small danger st-del">Delete</button></td></tr>`).join('')}</tbody>
+        </table></div>` : '<p class="muted">Nothing logged this month yet.</p>'}
+      </section>` : ''}
+
+      ${shifts.length || mgr ? `<section class="card">
+        <h2>${mgr ? 'By shift' : 'My shift'}, ${esc(monthName(month))}</h2>
+        ${shifts.length ? `<div class="table-wrap"><table class="list stats-table">
+          <thead><tr><th>Shift</th>${statsHeadCells()}</tr></thead>
+          <tbody>${shifts.map((r) => `<tr class="${r.shift === myShift ? 'is-me' : ''}"><td>${esc(r.shift)} Shift${r.shift === myShift ? ' (yours)' : ''}</td>${statsCells(r)}</tr>`).join('')}</tbody>
+        </table></div>` : '<p class="muted">Nothing logged for this month yet.</p>'}
+        ${!mgr ? '<p class="hint">Your whole shift’s totals. Other deputies’ numbers aren’t shown.</p>' : ''}
+      </section>` : (patrol && !myShift ? `<section class="card"><p class="muted">Ask a manager to set your shift (A or B) on the Team tab to see your shift’s totals.</p></section>` : '')}
+
+      ${sup && !mgr ? `<section class="card">
+        <h2>Deputies under me, ${esc(monthName(month))}</h2>
+        ${deputyTable(underMe, false)}
+        <p class="hint">Managers choose who reports to you on the Team tab.</p>
+      </section>` : ''}
+
+      ${mgr ? `<section class="card">
+        <div class="case-log-head">
+          <h2>Patrol deputies, ${esc(monthName(month))}</h2>
+          <button class="btn small" id="st-csv" type="button">Download CSV</button>
+        </div>
+        ${deputyTable(everyone, true)}
+        <p class="hint">Only people marked Patrol on the Team tab are counted.</p>
+      </section>` : ''}`;
+
+    $('#st-month').onchange = (e) => { st.month = e.target.value; showView('stats'); };
+
+    if (mgr) {
+      $('#st-csv').onclick = () => downloadCSV(`patrol-stats-${month.slice(0, 7)}.csv`, [
+        ['Month', 'Deputy', 'Shift', 'Supervisor', ...STAT_ALL.map(([k]) => STAT_SHORT[k]), 'Total'],
+        ...everyone.map((r) => [month.slice(0, 7), r.full_name, r.usual_shift || '', r.reports_to ? nameOf(r.reports_to) : '',
+          ...STAT_ALL.map(([k]) => Number(r[k]) || 0), statTotal(r)])
+      ]);
+    }
+
+    if (!patrol) return;
+    const f = $('#st-form');
+    const note = $('#st-note');
+    const byDate = Object.fromEntries(logged.map((r) => [r.shift_date, r]));
+
+    async function loadDate(date) {
+      st.date = date;
+      let row = byDate[date];
+      if (!row && date) {
+        const { data, error } = await sb.from('patrol_stats').select('*').eq('user_id', me()).eq('shift_date', date).maybeSingle();
+        if (error) throw error;
+        row = data;
+      }
+      f.shift.value = row?.shift || myShift || 'A';
+      STAT_TYPED.forEach(([k]) => { f[k].value = row ? Number(row[k]) || 0 : 0; });
+      note.textContent = row ? 'Already saved for this date. Saving again replaces it.' : '';
+      $('#st-io').textContent = '…';
+      const { count, error } = await sb.from('case_numbers').select('id', { count: 'exact', head: true })
+        .eq('reserved_by', me()).eq('case_date', date).eq('kind', 'I/O').eq('void', false);
+      if (f.shift_date.value !== date) return;   // picked another date meanwhile
+      $('#st-io').textContent = error ? '?' : String(count || 0);
+    }
+    const safeLoad = (date) => loadDate(date).catch((err) => toast(err.message || String(err), true));
+    safeLoad(st.date);
+    f.shift_date.onchange = () => { if (f.shift_date.value) safeLoad(f.shift_date.value); };
+
+    $$('.st-step', f).forEach((b) => {
+      b.onclick = () => {
+        const inp = f[b.dataset.k];
+        inp.value = Math.min(99, Math.max(0, (parseInt(inp.value, 10) || 0) + Number(b.dataset.d)));
+      };
+    });
+
+    f.onsubmit = (e) => {
+      e.preventDefault();
+      const row = { user_id: me(), shift_date: f.shift_date.value, shift: f.shift.value };
+      for (const [k, label, sub] of STAT_TYPED) {
+        const v = Number(f[k].value);
+        if (!Number.isInteger(v) || v < 0 || v > 99) { toast(`${label} (${sub}) must be a whole number from 0 to 99.`, true); return; }
+        row[k] = v;
+      }
+      if (!row.shift_date) { toast('Pick the shift date.', true); return; }
+      withBusy($('#st-save'), async () => {
+        const { error } = await sb.from('patrol_stats').upsert(row, { onConflict: 'user_id,shift_date' });
+        if (error) throw error;
+        toast(`Saved ${fmtShort(row.shift_date)}.`);
+        st.month = monthIso(parseDate(row.shift_date));
+        st.date = row.shift_date;
+        showView('stats');
+      });
+    };
+
+    $$('.st-edit', el).forEach((b) => {
+      b.onclick = () => {
+        const date = b.closest('tr').dataset.date;
+        f.shift_date.value = date;
+        safeLoad(date);
+        f.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+    });
+    $$('.st-del', el).forEach((b) => {
+      b.onclick = () => {
+        const tr = b.closest('tr');
+        if (!confirm(`Delete the stats you logged for ${fmtShort(tr.dataset.date)}?`)) return;
+        withBusy(b, async () => {
+          const { error } = await sb.from('patrol_stats').delete().eq('id', tr.dataset.id);
+          if (error) throw error;
+          toast('Deleted.');
+          if (st.date === tr.dataset.date) st.date = localToday();
+          showView('stats');
+        });
+      };
+    });
+  };
+
   /* ---------------- manager: audit log ---------------- */
   const AUDIT_AREAS = [
     ['timesheets', 'Timesheet'], ['time_off_requests', 'Time off'], ['case_numbers', 'Case number'],
     ['case_counters', 'Case number setting'], ['offduty_jobs', 'Off-duty job'], ['offduty_requests', 'Off-duty request'],
     ['events', 'Calendar event'], ['event_people', 'Calendar tag'], ['announcements', 'Announcement'],
-    ['profiles', 'Person'], ['duties', 'Special duty'], ['profile_duties', 'Duty assignment']
+    ['profiles', 'Person'], ['duties', 'Special duty'], ['profile_duties', 'Duty assignment'], ['patrol_stats', 'Patrol stats']
   ];
   const AUDIT_PER_PAGE = 50;
   const areaLabel = (t) => (AUDIT_AREAS.find(([k]) => k === t) || [t, t])[1];
@@ -1842,7 +2079,10 @@
     victim_defendant: 'Victim/Defendant', charge: 'Charge', kind: 'Type', case_date: 'Date', initials: 'INTS',
     void: 'Void', void_reason: 'Void reason', starts_at: 'Starts', ends_at: 'Ends', location: 'Location',
     title: 'Title', details: 'Details', spots: 'Spots', pay: 'Pay', next_seq: 'Next count', for_everyone: 'Show to everyone',
-    start_date: 'First day', end_date: 'Last day', reason: 'Reason', note: 'Note', signature: 'Signature'
+    start_date: 'First day', end_date: 'Last day', reason: 'Reason', note: 'Note', signature: 'Signature',
+    shift_date: 'Shift date', shift: 'Shift', felony_warrants: 'Felony warrants', misd_warrants: 'Misd./traffic warrants',
+    civil_papers: 'Civil papers', felony_arrests: 'On-view arrests (felony)', misd_arrests: 'On-view arrests (misd.)',
+    patrol: 'Patrol', is_supervisor: 'Supervisor', reports_to: 'Reports to', user_id: 'Person'
   };
   const HIDDEN_FIELDS = ['id', 'created_at', 'reviewed_by', 'reviewed_at', 'decided_by', 'decided_at', 'voided_by', 'voided_at',
     'signed_at', 'reserved_at', 'year', 'seq', 'sort', 'posted_by', 'created_by', 'k9_hours', 'traffic_ot_hours', 'notes'];
@@ -1958,6 +2198,7 @@
     const active = duties.filter((d) => d.active);
     const current = people.filter((p) => p.active !== false);
     const former = people.filter((p) => p.active === false);
+    const supervisors = current.filter((p) => p.is_supervisor);
 
     el.innerHTML = `
       <section class="card">
@@ -1974,8 +2215,9 @@
       <section class="card">
         <h2>Team</h2>
         <p class="muted">The name here is what prints at the top of their timesheet. Tick the special duties each person has — only those lines will show on their timesheet. When someone leaves, click <strong>Deactivate</strong> (don’t delete them in Supabase — that would lose their records).</p>
+        <p class="muted"><strong>Patrol stats:</strong> tick <strong>Patrol</strong> for deputies who log stats and set their shift. Tick <strong>Supervisor</strong> for anyone who should see the deputies assigned to them, then pick each deputy’s supervisor. Everyone else never sees the Stats tab.</p>
         <div class="table-wrap"><table class="list team">
-          <thead><tr><th>Name</th><th>Email</th><th>Special duties</th><th>Role</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Email</th><th>Special duties</th><th>Patrol stats</th><th>Role</th><th></th></tr></thead>
           <tbody>${current.map((p) => `<tr data-id="${p.id}">
             <td><input class="p-name" value="${esc(p.full_name)}"></td>
             <td class="email">${esc(p.email)}</td>
@@ -1983,6 +2225,13 @@
               ? `<span class="chip muted-chip" title="Shown on everyone’s timesheet">${esc(d.name)} (all)</span>`
               : `<label class="chip-check"><input type="checkbox" data-duty="${d.id}" ${has.has(`${p.id}|${d.id}`) ? 'checked' : ''}><span>${esc(d.name)}</span></label>`).join('')
               : '<span class="muted">None set up</span>'}</td>
+            <td class="stat-set">
+              <label class="chip-check"><input type="checkbox" class="p-patrol" ${p.patrol ? 'checked' : ''}><span>Patrol</span></label>
+              <select class="p-shift" aria-label="Shift"><option value="">No shift</option>${SHIFTS.map((x) => `<option value="${x}" ${p.shift === x ? 'selected' : ''}>${x} Shift</option>`).join('')}</select>
+              <label class="chip-check"><input type="checkbox" class="p-sup" ${p.is_supervisor ? 'checked' : ''}><span>Supervisor</span></label>
+              <select class="p-boss" aria-label="Supervisor"><option value="">No supervisor</option>${supervisors.filter((x) => x.id !== p.id).map((x) =>
+                `<option value="${x.id}" ${p.reports_to === x.id ? 'selected' : ''}>Reports to ${esc(x.full_name || x.email)}</option>`).join('')}</select>
+            </td>
             <td><select class="p-role" ${p.id === me() ? 'disabled title="You can’t change your own role"' : ''}>
               <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
               <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
@@ -2037,7 +2286,15 @@
       b.onclick = () => {
         const tr = b.closest('tr');
         const id = tr.dataset.id;
-        const update = { full_name: $('.p-name', tr).value.trim() };
+        const before = state.people[id] || {};
+        const update = {
+          full_name: $('.p-name', tr).value.trim(),
+          patrol: $('.p-patrol', tr).checked,
+          shift: $('.p-shift', tr).value || null,
+          is_supervisor: $('.p-sup', tr).checked,
+          reports_to: $('.p-boss', tr).value || null
+        };
+        const supChanged = update.is_supervisor !== !!before.is_supervisor;
         if (id !== me()) update.role = $('.p-role', tr).value;
         const checks = $$('input[data-duty]', tr);
         const add = checks.filter((c) => c.checked && !has.has(`${id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
@@ -2056,9 +2313,14 @@
           }
           add.forEach((d) => has.add(`${id}|${d}`));
           remove.forEach((d) => has.delete(`${id}|${d}`));
-          if (id === me()) state.profile.full_name = update.full_name;
+          if (id === me()) {
+            const hadStats = canSeeStats();
+            Object.assign(state.profile, update);
+            if (hadStats !== canSeeStats()) { toast('Saved.'); renderShell(); return; }
+          }
           toast('Saved.');
           await loadPeople();
+          if (supChanged) showView('team');   // refresh the supervisor lists
         });
       };
     });
