@@ -128,8 +128,23 @@
     finally { if (btn && btn.isConnected) btn.disabled = false; }
   }
 
+  // Copy each column's heading onto its cells so phones can show tables as cards
+  function labelTables(root) {
+    $$('table.list', root).forEach((t) => {
+      const heads = $$('thead th', t).map((th) => th.textContent.trim());
+      $$('tbody tr', t).forEach((tr) => {
+        let i = 0;
+        [...tr.children].forEach((td) => {
+          if (!td.hasAttribute('data-label')) td.setAttribute('data-label', td.colSpan > 1 ? '' : (heads[i] || ''));
+          i += td.colSpan || 1;
+        });
+      });
+    });
+  }
+
   function openModal(html) {
     $('#modal-body').innerHTML = html;
+    labelTables($('#modal-body'));
     $('#modal').classList.remove('hidden');
     $('#modal').scrollTop = 0;
   }
@@ -435,7 +450,7 @@
     $('.tabs button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
     const el = $('#view');
     el.innerHTML = '<div class="loading">Loading…</div>';
-    try { await views[v](el); }
+    try { await views[v](el); labelTables(el); }
     catch (err) { el.innerHTML = `<div class="card"><p class="error-text">${esc(err.message)}</p></div>`; }
   }
 
@@ -1150,6 +1165,9 @@
     soonEv.data = soonEv.data.filter(show);
     const byDay = {};
     monthEv.data.forEach((e) => (byDay[isoDate(new Date(e.starts_at))] ||= []).push(e));
+    // holidays, then other all-day events, then by time
+    Object.values(byDay).forEach((list) => list.sort((x, y) =>
+      (y.kind === 'holiday') - (x.kind === 'holiday') || (y.all_day ? 1 : 0) - (x.all_day ? 1 : 0) || x.starts_at.localeCompare(y.starts_at)));
 
     const annCard = (x) => `<article class="ann ${x.pinned ? 'pinned' : ''} ann-${x.kind}">
         <div class="ann-head">
@@ -1160,21 +1178,14 @@
         </div>
         ${x.body ? `<div class="ann-body">${multiline(x.body)}</div>` : ''}
       </article>`;
-    const general = ann.data.filter((x) => x.kind === 'general');
-    const training = ann.data.filter((x) => x.kind === 'training');
+    const general = ann.data;   // training announcements (older posts) show here too, tagged
     const monthName = m.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
     el.innerHTML = `
-      <div class="two-col">
-        <section class="card">
-          <div class="card-head"><h2>Announcements</h2>${isManager() ? '<button class="btn small primary" id="ann-new">Post announcement</button>' : ''}</div>
-          ${general.length ? general.map(annCard).join('') : '<p class="muted">No announcements right now.</p>'}
-        </section>
-        <section class="card">
-          <div class="card-head"><h2>Training announcements</h2>${isManager() ? '<button class="btn small primary" id="ann-new-t">Post training</button>' : ''}</div>
-          ${training.length ? training.map(annCard).join('') : '<p class="muted">No training announcements right now.</p>'}
-        </section>
-      </div>
+      <section class="card">
+        <div class="card-head"><h2>Announcements</h2>${isManager() ? '<button class="btn small primary" id="ann-new">Post announcement</button>' : ''}</div>
+        ${general.length ? general.map(annCard).join('') : '<p class="muted">No announcements right now.</p>'}
+      </section>
 
       <section class="card">
         <div class="card-head cal-head">
@@ -1184,7 +1195,7 @@
             <button class="btn small" id="cal-next" aria-label="Next month">›</button>
             <button class="btn small" id="cal-today">Today</button>
           </div>
-          <div class="cal-legend"><span class="ev-dot ev-training"></span>Training <span class="ev-dot ev-court"></span>Court <span class="ev-dot ev-holiday"></span>Holiday <span class="ev-dot ev-other"></span>Other <span class="ev-dot ev-mine"></span>You're on it</div>
+          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
           ${isManager() ? `<div class="cal-tools">
             <div class="seg-toggle" role="group" aria-label="Whose events">
               <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
@@ -1196,9 +1207,9 @@
           ${[...Array(42)].map((_, i) => {
             const d = addDays(gridStart, i); const iso = isoDate(d);
             const evs = byDay[iso] || [];
-            return `<div class="cal-day ${d.getMonth() !== m.getMonth() ? 'other-month' : ''} ${iso === today ? 'is-today' : ''}" data-day="${iso}">
-              <div class="cal-num">${d.getDate()}</div>
-              ${evs.slice(0, 3).map((e) => `<button class="ev ev-${e.kind} ${mine(e) ? 'ev-is-mine' : ''}" data-ev="${e.id}" title="${esc(e.title)}">${e.all_day ? '' : `<span class="ev-time">${esc(fmtTime(e.starts_at).replace(':00', '').replace(' ', '').toLowerCase())}</span> `}${esc(e.title)}</button>`).join('')}
+            return `<div class="cal-day ${d.getMonth() !== m.getMonth() ? 'other-month' : ''} ${iso === today ? 'is-today' : ''} ${evs.some(mine) ? 'has-mine' : ''}" data-day="${iso}">
+              <div class="cal-num">${d.getDate()}${evs.some(mine) ? '<span class="mine-dot" title="You’re on an event this day"></span>' : ''}</div>
+              ${evs.slice(0, 3).map((e) => `<button class="ev ev-${e.kind} ${mine(e) ? 'ev-is-mine' : ''}" data-ev="${e.id}" title="${esc(e.title)}">${mine(e) ? '<span class="mine-dot"></span>' : ''}${e.all_day ? '' : `<span class="ev-time">${esc(fmtTime(e.starts_at).replace(':00', '').replace(' ', '').toLowerCase())}</span> `}${esc(e.title)}</button>`).join('')}
               ${evs.length > 3 ? `<button class="ev-more" data-more="${iso}">+${evs.length - 3} more</button>` : ''}
             </div>`;
           }).join('')}
@@ -1234,7 +1245,6 @@
     $$('[data-calmine]', el).forEach((b) => { b.onclick = () => { state.calMine = b.dataset.calmine === '1'; showView('calendar'); }; });
     if (isManager()) {
       $('#ann-new').onclick = () => editAnnouncement({ kind: 'general' });
-      $('#ann-new-t').onclick = () => editAnnouncement({ kind: 'training' });
       $('#ev-new').onclick = () => editEvent({ kind: 'court', starts_at: null }, [], people);
       $$('[data-ann]', el).forEach((b) => { b.onclick = () => editAnnouncement(ann.data.find((x) => x.id === b.dataset.ann)); });
       $$('.cal-day', el).forEach((d) => {
@@ -1276,7 +1286,7 @@
       <form id="ev-form" autocomplete="off">
         <div class="row">
           <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court (use the case number, not names)"></label>
+          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court"></label>
         </div>
         <label class="check not-holiday"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
         <div class="holiday-only notice"><label style="margin:0">Paid holiday hours<input type="number" name="holiday_hours" min="0" max="24" step="0.25" value="${e.holiday_hours ?? 8}" style="max-width:110px"></label>
@@ -1287,7 +1297,8 @@
           <label>End date<input type="date" name="ed" value="${ed}"></label>
           <label class="time-f">End time<input type="time" name="et" value="${e.all_day ? '' : et}"></label>
         </div>
-        <label>Location<input name="location" value="${esc(e.location || '')}" placeholder="e.g. Cleburne County Courthouse, Courtroom B"></label>
+        <p class="hint" style="margin-top:-.5rem">For court, use the case number in the title, not names.</p>
+        <label>Location<input name="location" value="${esc(e.location || '')}" placeholder="e.g. Courthouse, Courtroom B"></label>
         <label>Details<textarea name="details" rows="3">${esc(e.details || '')}</textarea></label>
         <div class="not-holiday">
         <label class="check"><input type="checkbox" name="for_everyone" ${e.for_everyone ? 'checked' : ''}><span><strong>Show to everyone</strong> (office-wide training, meeting…)</span></label>
@@ -1375,10 +1386,10 @@
 
   function editAnnouncement(x) {
     openModal(`
-      <h2>${x.id ? 'Edit' : 'Post'} ${x.kind === 'training' ? 'training announcement' : 'announcement'}</h2>
+      <h2>${x.id ? 'Edit' : 'Post'} announcement</h2>
       <form id="ann-form" autocomplete="off">
         <div class="row">
-          <label class="narrow-role">Type<select name="kind"><option value="general" ${x.kind === 'general' ? 'selected' : ''}>General</option><option value="training" ${x.kind === 'training' ? 'selected' : ''}>Training</option></select></label>
+          <input type="hidden" name="kind" value="${esc(x.kind || 'general')}">
           <label>Title<input name="title" required value="${esc(x.title || '')}"></label>
         </div>
         <label>Message<textarea name="body" rows="6">${esc(x.body || '')}</textarea></label>
@@ -1387,7 +1398,7 @@
           <label class="check" style="align-self:center"><input type="checkbox" name="pinned" ${x.pinned ? 'checked' : ''}><span>Pin to the top</span></label>
         </div>
         ${x.id ? '' : '<label class="check"><input type="checkbox" name="email_all"><span>Also email this to everyone</span></label>'}
-        <p class="hint">For a training on a specific date, also add it to the calendar with <strong>Add event</strong> → Training.</p>
+        <p class="hint">Trainings, court dates and holidays go on the calendar with <strong>Add event</strong>.</p>
         <div class="actions">
           <button class="btn primary" type="submit">${x.id ? 'Save' : 'Post'}</button>
           ${x.id ? '<button class="btn danger" type="button" id="ann-del">Delete</button>' : ''}
