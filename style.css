@@ -512,3 +512,31 @@ tr.from-times input.duty-input { background: #f3f4f6; }
 .picker-tools { display: flex; gap: .4rem; align-items: center; margin: -.4rem 0 .4rem; }
 .picker-tools .hint { margin: 0 0 0 .3rem; }
 .people-picker { margin-top: 0; }
+
+/* auto sign-out warning */
+.idle-warn { position: fixed; inset: 0; background: rgba(15, 20, 30, .55); display: grid; place-items: center; z-index: 200; padding: 1rem; }
+.idle-box { background: #fff; border-radius: var(--radius); border-top: 4px solid var(--gold); padding: 1.25rem 1.4rem; max-width: 380px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+.idle-box strong { font-size: 1.15rem; }
+.idle-box p { margin: .5rem 0 1rem; }
+#idle-left { font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* audit log */
+.audit-filters label { flex: 1 1 150px; margin-bottom: .6rem; }
+.audit-filters .btn { margin-bottom: .6rem; }
+table.audit td { vertical-align: top; }
+td.nowrap { white-space: nowrap; }
+.audit-what { min-width: 280px; white-space: normal !important; }
+.tag-insert { background: #dcf3e6; color: var(--ok); }
+.tag-update { background: #e8edf5; color: #3b4a63; }
+.tag-delete { background: #fbe3e3; color: var(--danger); }
+tr.audit-detail > td { background: #fafbfc; padding: .5rem .75rem .9rem; white-space: normal !important; }
+table.audit-diff { width: 100%; font-size: .85rem; border: 1px solid var(--line); background: #fff; }
+table.audit-diff th { font-size: .72rem; }
+table.audit-diff td { white-space: normal !important; overflow-wrap: anywhere; vertical-align: top; }
+table.audit-diff td:first-child { font-weight: 600; width: 22%; }
+
+/* paid holidays */
+.ev-holiday, .ev-dot.ev-holiday { background: #f3e3f5; border-color: #8e3a9d; color: #5b1f66; }
+.ev-dot.ev-holiday { background: #8e3a9d; }
+.tag-holiday { background: #f3e3f5; color: #5b1f66; }
+.holiday-note { background: #f7eef9; border-color: #e2c6e8; }

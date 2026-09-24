@@ -61,6 +61,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - **Announcements** and **Training announcements** at the top (managers post, pin, set "show until", edit or delete).
 - A month **calendar**. Deputies see only **their own** events (the ones they're tagged on) plus anything marked **Show to everyone**; this is enforced by the database. Managers see all events and can switch to **Just mine**. When adding an event, managers tag deputies (**Select all** / **Clear** helpers) or tick **Show to everyone**. Your own events are outlined in red. On a phone, tap a day to see its events.
 - **Coming up**: the next 45 days as a list.
+- **Paid holidays**: add an event with type **Paid holiday** (hours default to 8). It shows on everyone's calendar, and when anyone opens a timesheet for that pay period, **Total Holiday Hours** and that day's explanation are filled in automatically (editable before signing). Timesheets already submitted aren't changed.
 
 **Off-Duty Jobs (everyone)**
 - Managers post jobs (when, where, pay, number of spots, details).
@@ -122,3 +123,8 @@ Setup (uses your Resend account, with ccsoportal.com verified):
    - `SITE_URL`: `https://ccsoportal.com/`
 
 If alerts aren't set up, everything still saves; the site shows a one-time note that the email couldn't be sent. Deactivated people never get emails.
+
+## Security features
+
+- **Auto sign-out:** after 28 minutes with no activity, a warning appears with a 2-minute countdown and a **Stay signed in** button. Any mouse, key or touch activity resets it. At 30 minutes the person is signed out and sees a note on the sign-in page. It works across tabs and when a phone wakes up. To change the time, add `IDLE_MINUTES: 20,` (for example) to `config.js`.
+- **Audit log** (managers, **Audit Log** tab): the database records every change to timesheets, time off, case numbers, off-duty jobs and requests, calendar events and tags, announcements, people, roles and duties: who, when, what, and before → after. Filter by who did it, whose record it is, area and date; click **Details** for the field-by-field changes. Entries can't be edited or deleted from the website, not even by managers. Signature images aren't copied into the log. Changes made directly in the Supabase dashboard show as "Dashboard / system". Sign-ins themselves are in Supabase → Logs → Auth.

@@ -29,7 +29,7 @@
   let mustSetPassword = linkType === 'invite' || linkType === 'recovery';
 
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const state = { session: null, profile: null, view: 'calendar', month: null, calMine: false, dir: {}, people: {}, duties: [], filterUser: '', cases: { year: null, q: '', page: 0 } };
+  const state = { session: null, profile: null, view: 'calendar', month: null, calMine: false, dir: {}, people: {}, duties: [], filterUser: '', cases: { year: null, q: '', page: 0 }, audit: { page: 0, actor: '', subject: '', area: '', from: '', to: '' } };
   let loadedUserId = null;
 
   const TIME_OFF_TYPES = [
@@ -191,6 +191,57 @@
     return { clear: reset, isEmpty: () => empty, toDataURL: () => canvas.toDataURL('image/png') };
   }
 
+  /* ---------------- auto sign-out when idle ---------------- */
+  const IDLE_MS = (Number(cfg.IDLE_MINUTES) || 30) * 60000;
+  const WARN_MS = Math.min(2 * 60000, IDLE_MS / 2);
+  const IDLE_KEY = 'portal_last_activity';
+  let idleOn = false, idleTimer = null, lastLocal = Date.now(), signedOutForIdle = false;
+  const storeActivity = (t) => { try { localStorage.setItem(IDLE_KEY, String(t)); } catch (_) { /* private mode */ } };
+  const lastActivity = () => { let t = lastLocal; try { t = Math.max(t, Number(localStorage.getItem(IDLE_KEY)) || 0); } catch (_) { /* ignore */ } return t; };
+  function markActive() {
+    const now = Date.now();
+    if (now - lastLocal < 10000 && !$('#idle-warn')) return;   // don't write on every mouse move
+    lastLocal = now; storeActivity(now);
+    if ($('#idle-warn')) checkIdle();
+  }
+  function showIdleWarning(msLeft) {
+    let w = $('#idle-warn');
+    if (!w) {
+      document.body.insertAdjacentHTML('beforeend', `<div id="idle-warn" class="idle-warn" role="alertdialog" aria-live="assertive">
+        <div class="idle-box"><strong>Still there?</strong>
+        <p>For security, you’ll be signed out in <span id="idle-left"></span> because of inactivity. Anything you haven’t submitted will be lost.</p>
+        <button class="btn primary" id="idle-stay">Stay signed in</button></div></div>`);
+      w = $('#idle-warn');
+      $('#idle-stay').onclick = () => { lastLocal = Date.now(); storeActivity(lastLocal); hideIdleWarning(); };
+    }
+    const s = Math.max(0, Math.ceil(msLeft / 1000));
+    $('#idle-left').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+  function hideIdleWarning() { $('#idle-warn')?.remove(); }
+  function checkIdle() {
+    if (!idleOn) return;
+    const idle = Date.now() - lastActivity();
+    if (idle >= IDLE_MS) { idleSignOut(); return; }
+    if (idle >= IDLE_MS - WARN_MS) showIdleWarning(IDLE_MS - idle); else hideIdleWarning();
+  }
+  const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'scroll', 'touchstart', 'mousemove', 'wheel'];
+  function startIdleWatch() {
+    if (idleOn) return;
+    idleOn = true; lastLocal = Date.now(); storeActivity(lastLocal);
+    ACTIVITY_EVENTS.forEach((ev) => document.addEventListener(ev, markActive, { passive: true, capture: true }));
+    document.addEventListener('visibilitychange', checkIdle);   // phone waking up / tab coming back
+    idleTimer = setInterval(checkIdle, 1000);
+  }
+  function stopIdleWatch() {
+    idleOn = false; clearInterval(idleTimer); hideIdleWarning();
+    ACTIVITY_EVENTS.forEach((ev) => document.removeEventListener(ev, markActive, { capture: true }));
+    document.removeEventListener('visibilitychange', checkIdle);
+  }
+  async function idleSignOut() {
+    stopIdleWatch(); closeModal(); signedOutForIdle = true;
+    await sb.auth.signOut();
+  }
+
   /* ---------------- auth flow ---------------- */
   sb.auth.onAuthStateChange((event, session) => {
     if (event === 'PASSWORD_RECOVERY') mustSetPassword = true;
@@ -202,6 +253,7 @@
     state.session = session;
     if (!session) {
       loadedUserId = null; state.profile = null; state.people = {};
+      stopIdleWatch();
       return renderLogin();
     }
     if (mustSetPassword) return renderSetPassword();
@@ -261,6 +313,7 @@
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
       ${logoImg('auth-logo')}
       <h1 class="auth-org">${esc(ORG)}</h1>
+      ${signedOutForIdle && !reset ? `<div class="notice">You were signed out after ${Math.round(IDLE_MS / 60000)} minutes of inactivity.</div>` : ''}
       <p class="muted">${reset ? 'Enter your email and we’ll send you a reset link.' : 'Sign in to your account.'}</p>
       <form id="auth-form">
         <label>Email<input type="email" name="email" required autocomplete="email"></label>
@@ -269,6 +322,7 @@
       </form>
       <button class="btn-link" id="toggle-mode">${reset ? 'Back to sign in' : 'Forgot password?'}</button>
     </div></div>`;
+    signedOutForIdle = false;
     $('#toggle-mode').onclick = () => renderLogin(reset ? 'login' : 'reset');
     $('#auth-form').onsubmit = (e) => {
       e.preventDefault();
@@ -355,7 +409,7 @@
 
   function renderShell() {
     const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers'], ['offduty', 'Off-Duty Jobs']];
-    if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team']);
+    if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team'], ['audit', 'Audit Log']);
     if (!tabs.some(([k]) => k === state.view)) state.view = 'calendar';
 
     app.innerHTML = `
@@ -370,6 +424,7 @@
       <div class="tabs-wrap"><nav class="tabs">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav></div>
       <main id="view"></main>`;
     $('#signout').onclick = () => sb.auth.signOut();
+    startIdleWatch();
     $$('.tabs button').forEach((b) => { b.onclick = () => showView(b.dataset.view); });
     showView(state.view);
   }
@@ -488,6 +543,13 @@
     if (error) throw error;
     const myIds = new Set(assigned.map((a) => a.duty_id));
     const myDuties = state.duties.filter((d) => d.active && (d.everyone || myIds.has(d.id)));
+    // Paid holidays on the calendar (for pre-filling Holiday Hours)
+    const opts = periodOptions(mine.map((t) => t.period_start));
+    const hol = await sb.from('events').select('title, starts_at, holiday_hours').eq('kind', 'holiday')
+      .gte('starts_at', new Date(`${opts[opts.length - 1]}T00:00`).toISOString())
+      .lt('starts_at', new Date(`${periodEnd(opts[0])}T23:59`).toISOString());
+    const holidays = (hol.error ? [] : hol.data).map((h) => ({ ...h, date: isoDate(new Date(h.starts_at)), hours: Number(h.holiday_hours ?? 8) }));
+    const holidaysIn = (p) => { const days = new Set(periodDays(p)); return holidays.filter((h) => days.has(h.date)); };
     segDuties = myDuties;
 
     el.innerHTML = `
@@ -498,6 +560,7 @@
             <label>Pay period${periodSelect('ts-period', currentPeriod(), mine.map((t) => t.period_start))}</label>
           </div>
           <div id="ts-status" class="notice hidden"></div>
+          <div id="ts-holiday" class="notice holiday-note hidden"></div>
           <div class="table-wrap"><table class="grid entry">
             <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
             <tbody id="ts-rows"></tbody>
@@ -578,6 +641,21 @@
       }
       buildRows(p, existing?.entries || []);
       EXTRA_HOURS.forEach(([k]) => { $(`#x-${k}`).value = existing && Number(existing[k]) ? Number(existing[k]) : ''; });
+      // Paid holidays in this pay period
+      const hs = holidaysIn(p), holNote = $('#ts-holiday');
+      const holTotal = hs.reduce((s, h) => s + h.hours, 0);
+      const holList = hs.map((h) => `${esc(h.title)} (${esc(fmtShort(h.date))}, ${hrs(h.hours)} hrs)`).join(', ');
+      holNote.classList.toggle('hidden', !hs.length);
+      if (hs.length && !existing) {
+        $('#x-holiday_hours').value = holTotal || '';
+        hs.forEach((h) => {
+          const expl = $(`#ts-rows tr[data-date="${h.date}"] .t-expl`);
+          if (expl && !expl.value) expl.value = `Holiday: ${h.title}`;
+        });
+        holNote.innerHTML = `🗓️ Paid holiday this pay period: ${holList}. <strong>${hrs(holTotal)} hours</strong> were added to Total Holiday Hours. Change it if your holiday pay is different.`;
+      } else if (hs.length) {
+        holNote.innerHTML = `🗓️ Paid holiday this pay period: ${holList}.${Number(existing.holiday_hours) !== holTotal ? ` Your timesheet has ${hrs(existing.holiday_hours)} holiday hours.` : ''}`;
+      }
       myDuties.forEach((d) => {
         const saved = existing ? (existing.duty_hours || []).find((x) => x.duty_id === d.id) : null;
         const v = existing ? Number(saved?.hours) || 0 : Number(d.default_hours) || 0;  // new sheet: pre-fill automatic hours
@@ -1029,7 +1107,7 @@
   const toLocalInput = (ts) => { if (!ts) return ['', '']; const d = new Date(ts); return [isoDate(d), `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`]; };
   const fromLocalInput = (date, time) => date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
   const multiline = (s) => esc(s || '').replace(/\n/g, '<br>');
-  const EVENT_KINDS = [['training', 'Training'], ['court', 'Court'], ['other', 'Other']];
+  const EVENT_KINDS = [['training', 'Training'], ['court', 'Court'], ['holiday', 'Paid holiday'], ['other', 'Other']];
   const kindLabel = (k) => (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1];
   function peoplePicker(list, selected = new Set()) {
     return `<div class="picker-tools"><button type="button" class="btn small" data-pick="all">Select all</button><button type="button" class="btn small" data-pick="none">Clear</button><span class="hint picker-count"></span></div>
@@ -1106,7 +1184,7 @@
             <button class="btn small" id="cal-next" aria-label="Next month">›</button>
             <button class="btn small" id="cal-today">Today</button>
           </div>
-          <div class="cal-legend"><span class="ev-dot ev-training"></span>Training <span class="ev-dot ev-court"></span>Court <span class="ev-dot ev-other"></span>Other <span class="ev-dot ev-mine"></span>You're on it</div>
+          <div class="cal-legend"><span class="ev-dot ev-training"></span>Training <span class="ev-dot ev-court"></span>Court <span class="ev-dot ev-holiday"></span>Holiday <span class="ev-dot ev-other"></span>Other <span class="ev-dot ev-mine"></span>You're on it</div>
           ${isManager() ? `<div class="cal-tools">
             <div class="seg-toggle" role="group" aria-label="Whose events">
               <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
@@ -1180,6 +1258,7 @@
         <h2 style="margin-top:.4rem">${esc(e.title)}</h2>
         <dl class="details">
           <dt>When</dt><dd>${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</dd>
+          ${e.kind === 'holiday' ? `<dt>Paid</dt><dd>${hrs(e.holiday_hours ?? 8)} hours (added to timesheets automatically)</dd>` : ''}
           ${e.location ? `<dt>Where</dt><dd>${esc(e.location)}</dd>` : ''}
           ${names.length ? `<dt>${e.kind === 'court' ? 'Deputies' : 'People'}</dt><dd>${names.map((n) => `<span class="chip ${tagged.includes(me()) && n === dirName(me()) ? '' : 'muted-chip'}">${esc(n)}</span>`).join(' ')}</dd>` : ''}
           ${e.details ? `<dt>Details</dt><dd>${multiline(e.details)}</dd>` : ''}
@@ -1199,7 +1278,9 @@
           <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
           <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court (use the case number, not names)"></label>
         </div>
-        <label class="check"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
+        <label class="check not-holiday"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
+        <div class="holiday-only notice"><label style="margin:0">Paid holiday hours<input type="number" name="holiday_hours" min="0" max="24" step="0.25" value="${e.holiday_hours ?? 8}" style="max-width:110px"></label>
+          <p class="hint" style="margin:.4rem 0 0">Shows on everyone’s calendar. These hours are filled in automatically as Holiday Hours on timesheets for that pay period (deputies can adjust before signing).</p></div>
         <div class="row">
           <label>Date<input type="date" name="sd" required value="${sd}"></label>
           <label class="time-f">Start time<input type="time" name="st" value="${e.all_day ? '' : st || '09:00'}"></label>
@@ -1208,10 +1289,12 @@
         </div>
         <label>Location<input name="location" value="${esc(e.location || '')}" placeholder="e.g. Cleburne County Courthouse, Courtroom B"></label>
         <label>Details<textarea name="details" rows="3">${esc(e.details || '')}</textarea></label>
-        <label class="check"><input type="checkbox" name="for_everyone" ${e.for_everyone ? 'checked' : ''}><span><strong>Show to everyone</strong> (office-wide training, meeting, holiday…)</span></label>
+        <div class="not-holiday">
+        <label class="check"><input type="checkbox" name="for_everyone" ${e.for_everyone ? 'checked' : ''}><span><strong>Show to everyone</strong> (office-wide training, meeting…)</span></label>
         <label>Deputies on this (court subpoena, required training…)</label>
         ${peoplePicker(people, new Set(tagged))}
         <p class="hint" id="ev-vis"></p>
+        </div>
         <label class="check"><input type="checkbox" name="email_people" checked><span>Email the deputies on this (when added, or if the time or place changes)</span></label>
         <div class="actions">
           <button class="btn primary" type="submit">${e.id ? 'Save' : 'Add to calendar'}</button>
@@ -1219,8 +1302,15 @@
         </div>
       </form>`);
     const f = $('#ev-form');
-    const syncAllDay = () => { $$('.time-f', f).forEach((l) => l.classList.toggle('hidden', f.all_day.checked)); };
-    f.all_day.onchange = syncAllDay; syncAllDay();
+    const isHoliday = () => f.kind.value === 'holiday';
+    const syncAllDay = () => { $$('.time-f', f).forEach((l) => l.classList.toggle('hidden', f.all_day.checked || isHoliday())); };
+    const syncKind = () => {
+      $$('.holiday-only', f).forEach((x) => x.classList.toggle('hidden', !isHoliday()));
+      $$('.not-holiday', f).forEach((x) => x.classList.toggle('hidden', isHoliday()));
+      if (isHoliday() && !f.title.value.trim()) f.title.placeholder = 'e.g. Labor Day';
+      syncAllDay();
+    };
+    f.all_day.onchange = syncAllDay; f.kind.addEventListener('change', syncKind); syncKind();
     $$('[data-pick]', f).forEach((b) => {
       b.onclick = () => {
         $$('.people-picker input', f).forEach((c) => { c.checked = b.dataset.pick === 'all'; });
@@ -1238,9 +1328,10 @@
     f.onsubmit = (ev) => {
       ev.preventDefault();
       withBusy(f.querySelector('button[type=submit]'), async () => {
-        const allDay = f.all_day.checked;
+        const allDay = f.all_day.checked || isHoliday();
         const row = {
-          kind: f.kind.value, title: f.title.value.trim(), all_day: allDay, for_everyone: f.for_everyone.checked,
+          kind: f.kind.value, title: f.title.value.trim(), all_day: allDay, for_everyone: f.for_everyone.checked || isHoliday(),
+          holiday_hours: isHoliday() ? (Number(f.holiday_hours.value) || 0) : 8,
           starts_at: fromLocalInput(f.sd.value, allDay ? '00:00' : f.st.value),
           ends_at: f.ed.value || (!allDay && f.et.value) ? fromLocalInput(f.ed.value || f.sd.value, allDay ? '23:59' : (f.et.value || f.st.value)) : null,
           location: f.location.value.trim() || null, details: f.details.value.trim() || null
@@ -1255,12 +1346,12 @@
           if (r.error) throw r.error;
           id = r.data.id;
         }
-        const want = new Set($$('.people-picker input:checked', f).map((c) => c.value));
+        const want = new Set(isHoliday() ? [] : $$('.people-picker input:checked', f).map((c) => c.value));
         const had = new Set(tagged);
         const add = [...want].filter((u) => !had.has(u)), del = [...had].filter((u) => !want.has(u));
         if (add.length) { const r = await sb.from('event_people').insert(add.map((user_id) => ({ event_id: id, user_id }))); if (r.error) throw r.error; }
         if (del.length) { const r = await sb.from('event_people').delete().eq('event_id', id).in('user_id', del); if (r.error) throw r.error; }
-        if (f.email_people.checked) {
+        if (f.email_people.checked && !isHoliday()) {
           if (add.length) notify('event_tagged', id, { user_ids: add });
           const moved = e.id && (row.starts_at !== new Date(e.starts_at).toISOString() || (row.ends_at || null) !== (e.ends_at ? new Date(e.ends_at).toISOString() : null)
             || row.all_day !== !!e.all_day || (row.location || null) !== (e.location || null));
@@ -1711,6 +1802,131 @@
       $('#print-btn').onclick = () => window.print();
     });
   }
+
+  /* ---------------- manager: audit log ---------------- */
+  const AUDIT_AREAS = [
+    ['timesheets', 'Timesheet'], ['time_off_requests', 'Time off'], ['case_numbers', 'Case number'],
+    ['case_counters', 'Case number setting'], ['offduty_jobs', 'Off-duty job'], ['offduty_requests', 'Off-duty request'],
+    ['events', 'Calendar event'], ['event_people', 'Calendar tag'], ['announcements', 'Announcement'],
+    ['profiles', 'Person'], ['duties', 'Special duty'], ['profile_duties', 'Duty assignment']
+  ];
+  const AUDIT_PER_PAGE = 50;
+  const areaLabel = (t) => (AUDIT_AREAS.find(([k]) => k === t) || [t, t])[1];
+  const FIELD_LABELS = {
+    status: 'Status', manager_note: 'Manager note', full_name: 'Name', role: 'Role', active: 'Active',
+    entries: 'Time entries', total_hours: 'Hours worked', total_paid_hours: 'Hours to be paid', vacation_hours: 'Vacation',
+    holiday_hours: 'Holiday', sick_hours: 'Sick', duty_hours: 'Special-duty hours', signed_name: 'Signed name',
+    victim_defendant: 'Victim/Defendant', charge: 'Charge', kind: 'Type', case_date: 'Date', initials: 'INTS',
+    void: 'Void', void_reason: 'Void reason', starts_at: 'Starts', ends_at: 'Ends', location: 'Location',
+    title: 'Title', details: 'Details', spots: 'Spots', pay: 'Pay', next_seq: 'Next count', for_everyone: 'Show to everyone',
+    start_date: 'First day', end_date: 'Last day', reason: 'Reason', note: 'Note', signature: 'Signature'
+  };
+  const HIDDEN_FIELDS = ['id', 'created_at', 'reviewed_by', 'reviewed_at', 'decided_by', 'decided_at', 'voided_by', 'voided_at',
+    'signed_at', 'reserved_at', 'year', 'seq', 'sort', 'posted_by', 'created_by', 'k9_hours', 'traffic_ot_hours', 'notes'];
+  function auditValue(v) {
+    if (v === null || v === undefined || v === '') return '<span class="muted">—</span>';
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+    if (Array.isArray(v)) {
+      if (v.length && v[0] && v[0].date) return esc(v.map((e) => `${fmtShort(e.date)} ${clock(e.in) || ''}${e.out ? '–' + clock(e.out) : ''}${e.explanation ? ' (' + e.explanation + ')' : ''}`).join('; '));
+      if (v.length && v[0] && 'hours' in v[0]) return esc(v.map((d) => `${d.name}: ${hrs(d.hours)}`).join(', '));
+      return esc(JSON.stringify(v));
+    }
+    if (typeof v === 'object') return esc(JSON.stringify(v));
+    const s = String(v);
+    if (/^\d{4}-\d\d-\d\dT/.test(s)) return esc(fmtDateTime(s));
+    if (state.people[s]) return esc(personName(s));
+    return esc(s.length > 300 ? s.slice(0, 300) + '…' : s);
+  }
+  function auditSummary(r) {
+    const c = r.changes || {};
+    const what = areaLabel(r.table_name);
+    const lbl = r.label ? ` “${r.table_name === 'timesheets' ? periodLabel(r.label) : r.label}”` : '';
+    if (r.action === 'insert') return `Created ${what.toLowerCase()}${lbl}`;
+    if (r.action === 'delete') return `Deleted ${what.toLowerCase()}${lbl}`;
+    if (c.status) return `${what}${lbl}: ${c.status.old} → ${c.status.new}`;
+    if (c.void) return `${what}${lbl}: ${c.void.new ? 'voided' : 'restored'}`;
+    if (c.active) return `${what}${lbl}: ${c.active.new ? 'reactivated' : 'deactivated'}`;
+    if (c.role) return `${what}${lbl}: role ${c.role.old} → ${c.role.new}`;
+    const fields = Object.keys(c).filter((k) => !HIDDEN_FIELDS.includes(k)).map((k) => FIELD_LABELS[k] || k);
+    return `Changed ${what.toLowerCase()}${lbl}${fields.length ? ': ' + fields.join(', ') : ''}`;
+  }
+  function auditDetails(r) {
+    const c = r.changes || {};
+    const keys = Object.keys(c).filter((k) => !HIDDEN_FIELDS.includes(k));
+    if (!keys.length) return '<p class="muted">No other details.</p>';
+    if (r.action === 'update') {
+      return `<table class="audit-diff"><thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead><tbody>${keys.map((k) =>
+        `<tr><td>${esc(FIELD_LABELS[k] || k)}</td><td>${auditValue(c[k].old)}</td><td>${auditValue(c[k].new)}</td></tr>`).join('')}</tbody></table>`;
+    }
+    return `<table class="audit-diff"><thead><tr><th>Field</th><th>${r.action === 'delete' ? 'Value when deleted' : 'Value'}</th></tr></thead><tbody>${keys.map((k) =>
+      `<tr><td>${esc(FIELD_LABELS[k] || k)}</td><td>${auditValue(c[k])}</td></tr>`).join('')}</tbody></table>`;
+  }
+
+  views.audit = async (el) => {
+    const f = state.audit;
+    const people = await loadPeople();
+    let q = sb.from('audit_log').select('*', { count: 'exact' });
+    if (f.actor) q = f.actor === 'system' ? q.is('actor', null) : q.eq('actor', f.actor);
+    if (f.subject) q = q.eq('subject', f.subject);
+    if (f.area) q = q.eq('table_name', f.area);
+    if (f.from) q = q.gte('at', new Date(`${f.from}T00:00`).toISOString());
+    if (f.to) q = q.lt('at', addDays(parseDate(f.to), 1).toISOString());
+    const from = f.page * AUDIT_PER_PAGE;
+    const { data, error, count } = await q.order('at', { ascending: false }).range(from, from + AUDIT_PER_PAGE - 1);
+    if (error) throw error;
+    const total = count || 0, pages = Math.max(1, Math.ceil(total / AUDIT_PER_PAGE));
+    const personOpts = (sel, extra = '') => `<option value="">Anyone</option>${extra}${people.map((p) =>
+      `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.full_name || p.email)}${p.active === false ? ' (deactivated)' : ''}</option>`).join('')}`;
+
+    el.innerHTML = `
+      <section class="card">
+        <h2>Audit log</h2>
+        <p class="muted">Every change made in the portal, recorded by the database. Entries can’t be edited or deleted.</p>
+        <form id="audit-f" class="row end audit-filters">
+          <label>Done by<select name="actor">${personOpts(f.actor, `<option value="system" ${f.actor === 'system' ? 'selected' : ''}>Supabase dashboard / system</option>`)}</select></label>
+          <label>About person<select name="subject">${personOpts(f.subject)}</select></label>
+          <label>Area<select name="area"><option value="">All areas</option>${AUDIT_AREAS.map(([k, l]) => `<option value="${k}" ${k === f.area ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label>From<input type="date" name="from" value="${esc(f.from)}"></label>
+          <label>To<input type="date" name="to" value="${esc(f.to)}"></label>
+          <button class="btn" type="submit">Filter</button>
+          ${f.actor || f.subject || f.area || f.from || f.to ? '<button class="btn" type="button" id="audit-clear">Clear</button>' : ''}
+        </form>
+        ${data.length ? `<div class="table-wrap"><table class="list audit">
+          <thead><tr><th>When</th><th>Done by</th><th>About</th><th>What happened</th><th></th></tr></thead>
+          <tbody>${data.map((r) => `<tr class="audit-row">
+            <td class="nowrap">${esc(fmtDateTime(r.at))}</td>
+            <td>${r.actor ? esc(r.actor_name || personName(r.actor, 'Unknown')) : '<span class="muted">Dashboard / system</span>'}</td>
+            <td>${r.subject ? esc(personName(r.subject, '—')) : '<span class="muted">—</span>'}</td>
+            <td class="audit-what"><span class="tag tag-${r.action}">${esc(r.action)}</span> ${esc(auditSummary(r))}</td>
+            <td class="right"><button class="btn small" data-audit="${r.id}">Details</button></td>
+          </tr><tr class="audit-detail hidden" id="ad-${r.id}"><td colspan="5">${auditDetails(r)}</td></tr>`).join('')}</tbody>
+        </table></div>` : '<p class="muted">Nothing found.</p>'}
+        <div class="pager">
+          <button class="btn small" id="au-prev" ${f.page === 0 ? 'disabled' : ''}>‹ Newer</button>
+          <span>Page ${f.page + 1} of ${pages} · ${total} entr${total === 1 ? 'y' : 'ies'}</span>
+          <button class="btn small" id="au-next" ${f.page + 1 >= pages ? 'disabled' : ''}>Older ›</button>
+        </div>
+      </section>`;
+
+    const form = $('#audit-f');
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      Object.assign(f, { actor: form.actor.value, subject: form.subject.value, area: form.area.value,
+        from: form.from.value, to: form.to.value, page: 0 });
+      showView('audit');
+    };
+    ['actor', 'subject', 'area'].forEach((n) => { form[n].onchange = () => form.requestSubmit(); });
+    if ($('#audit-clear')) $('#audit-clear').onclick = () => { Object.assign(f, { actor: '', subject: '', area: '', from: '', to: '', page: 0 }); showView('audit'); };
+    $('#au-prev').onclick = () => { f.page--; showView('audit'); };
+    $('#au-next').onclick = () => { f.page++; showView('audit'); };
+    $$('[data-audit]', el).forEach((b) => {
+      b.onclick = () => {
+        const row = $(`#ad-${b.dataset.audit}`);
+        row.classList.toggle('hidden');
+        b.textContent = row.classList.contains('hidden') ? 'Details' : 'Hide';
+      };
+    });
+  };
 
   /* ---------------- manager: team & special duties ---------------- */
   views.team = async (el) => {
