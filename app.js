@@ -2199,73 +2199,104 @@
     const current = people.filter((p) => p.active !== false);
     const former = people.filter((p) => p.active === false);
     const supervisors = current.filter((p) => p.is_supervisor);
+    const tf = state.teamFilter || (state.teamFilter = { q: '', show: '' });
+    const nameOf = (id) => state.people[id]?.full_name || state.people[id]?.email || '';
+
+    const dutyChipsFor = (p) => active.filter((d) => !d.everyone && has.has(`${p.id}|${d.id}`))
+      .map((d) => `<span class="chip">${esc(d.name)}</span>`).join(' ');
+    const patrolText = (p) => p.patrol
+      ? `<span>${p.shift ? esc(p.shift) + ' Shift' : '<span class="error-text">No shift</span>'}${p.reports_to ? ` · <span class="muted">${esc(nameOf(p.reports_to))}</span>` : ''}</span>`
+      : '<span class="muted">—</span>';
+    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}</span>`;
+    const matches = (p) => {
+      const q = tf.q.trim().toLowerCase();
+      if (q && !`${p.full_name} ${p.email}`.toLowerCase().includes(q)) return false;
+      if (tf.show === 'patrol') return !!p.patrol;
+      if (tf.show === 'nonpatrol') return !p.patrol;
+      if (tf.show === 'supervisor') return !!p.is_supervisor;
+      if (tf.show === 'manager') return p.role === 'manager';
+      if (tf.show === 'nosup') return p.patrol && !p.reports_to;
+      return true;
+    };
+    const SHOW = [['', 'Everyone'], ['patrol', 'Patrol'], ['nonpatrol', 'Not patrol'], ['supervisor', 'Supervisors'],
+                  ['manager', 'Managers'], ['nosup', 'Patrol with no supervisor']];
 
     el.innerHTML = `
       <section class="card">
-        <h2>Invite someone</h2>
-        <form id="invite-form" class="row end" autocomplete="off">
-          <label>Full name<input name="full_name" required placeholder="e.g. Caleb Hill"></label>
-          <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
-          <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
-          <button class="btn primary" type="submit">Send invite</button>
-        </form>
-        <p class="hint">They’ll get an email to set their password. After they’re added, tick their special duties below.</p>
+        <details class="fold">
+          <summary><h2>Invite someone</h2></summary>
+          <form id="invite-form" class="row end" autocomplete="off">
+            <label>Full name<input name="full_name" required placeholder="e.g. Caleb Hill"></label>
+            <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
+            <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
+            <button class="btn primary" type="submit">Send invite</button>
+          </form>
+          <p class="hint">They’ll get an email to set their password. Then click <strong>Edit</strong> next to their name to set duties, patrol and shift.</p>
+        </details>
       </section>
 
       <section class="card">
-        <h2>Team</h2>
-        <p class="muted">The name here is what prints at the top of their timesheet. Tick the special duties each person has — only those lines will show on their timesheet. When someone leaves, click <strong>Deactivate</strong> (don’t delete them in Supabase — that would lose their records).</p>
-        <p class="muted"><strong>Patrol stats:</strong> tick <strong>Patrol</strong> for deputies who log stats and set their shift. Tick <strong>Supervisor</strong> for anyone who should see the deputies assigned to them, then pick each deputy’s supervisor. Everyone else never sees the Stats tab.</p>
-        <div class="table-wrap"><table class="list team">
-          <thead><tr><th>Name</th><th>Email</th><th>Special duties</th><th>Patrol stats</th><th>Role</th><th></th></tr></thead>
+        <h2>Team <span class="count muted-count">${current.length}</span></h2>
+        <div class="filter-bar team-filter">
+          <label>Find<input id="tm-q" type="search" placeholder="Name or email" value="${esc(tf.q)}"></label>
+          <label>Show<select id="tm-show">${SHOW.map(([k, l]) => `<option value="${k}" ${tf.show === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        </div>
+        <div class="table-wrap"><table class="list team-list">
+          <thead><tr><th>Name</th><th>Role</th><th>Patrol</th><th>Special duties</th><th></th></tr></thead>
           <tbody>${current.map((p) => `<tr data-id="${p.id}">
-            <td><input class="p-name" value="${esc(p.full_name)}"></td>
-            <td class="email">${esc(p.email)}</td>
-            <td class="duty-checks">${active.length ? active.map((d) => d.everyone
-              ? `<span class="chip muted-chip" title="Shown on everyone’s timesheet">${esc(d.name)} (all)</span>`
-              : `<label class="chip-check"><input type="checkbox" data-duty="${d.id}" ${has.has(`${p.id}|${d.id}`) ? 'checked' : ''}><span>${esc(d.name)}</span></label>`).join('')
-              : '<span class="muted">None set up</span>'}</td>
-            <td class="stat-set">
-              <label class="chip-check"><input type="checkbox" class="p-patrol" ${p.patrol ? 'checked' : ''}><span>Patrol</span></label>
-              <select class="p-shift" aria-label="Shift"><option value="">No shift</option>${SHIFTS.map((x) => `<option value="${x}" ${p.shift === x ? 'selected' : ''}>${x} Shift</option>`).join('')}</select>
-              <label class="chip-check"><input type="checkbox" class="p-sup" ${p.is_supervisor ? 'checked' : ''}><span>Supervisor</span></label>
-              <select class="p-boss" aria-label="Supervisor"><option value="">No supervisor</option>${supervisors.filter((x) => x.id !== p.id).map((x) =>
-                `<option value="${x.id}" ${p.reports_to === x.id ? 'selected' : ''}>Reports to ${esc(x.full_name || x.email)}</option>`).join('')}</select>
-            </td>
-            <td><select class="p-role" ${p.id === me() ? 'disabled title="You can’t change your own role"' : ''}>
-              <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
-              <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
-            </select></td>
-            <td class="right nowrap"><button class="btn small p-save">Save</button>
-              ${p.id === me() ? '' : `<button class="btn small danger p-deactivate" data-name="${esc(p.full_name || p.email)}">Deactivate</button>`}</td>
+            <td><div class="tm-name">${esc(p.full_name || '(no name)')}</div><div class="tm-email">${esc(p.email)}</div></td>
+            <td>${roleText(p)}</td>
+            <td>${patrolText(p)}</td>
+            <td class="tm-duties">${dutyChipsFor(p) || '<span class="muted">—</span>'}</td>
+            <td class="right"><button class="btn small p-edit">Edit</button></td>
           </tr>`).join('')}</tbody>
         </table></div>
+        <p class="muted hint" id="tm-none" hidden>No one matches.</p>
+        <p class="hint">When someone leaves, open <strong>Edit</strong> and click <strong>Deactivate</strong> (don’t delete them in Supabase — that would lose their records).</p>
       </section>
 
       ${former.length ? `<section class="card">
-        <h2>Deactivated <span class="count muted-count">${former.length}</span></h2>
-        <p class="muted">These people can’t sign in to see or submit anything. Their timesheets and time off are kept — find them on the Approvals tab with <strong>Show person</strong>.</p>
-        <div class="table-wrap"><table class="list">
-          <thead><tr><th>Name</th><th>Email</th><th>Deactivated</th><th></th></tr></thead>
-          <tbody>${former.map((p) => `<tr data-id="${p.id}">
-            <td>${esc(p.full_name)}</td><td class="muted">${esc(p.email)}</td>
-            <td>${esc(fmtDateTime(p.deactivated_at))}</td>
-            <td class="right"><button class="btn small p-reactivate" data-name="${esc(p.full_name || p.email)}">Reactivate</button></td>
-          </tr>`).join('')}</tbody>
-        </table></div>
+        <details class="fold">
+          <summary><h2>Deactivated <span class="count muted-count">${former.length}</span></h2></summary>
+          <p class="muted">These people can’t sign in to see or submit anything. Their timesheets and time off are kept — find them on the Approvals tab with <strong>Show person</strong>.</p>
+          <div class="table-wrap"><table class="list">
+            <thead><tr><th>Name</th><th>Email</th><th>Deactivated</th><th></th></tr></thead>
+            <tbody>${former.map((p) => `<tr data-id="${p.id}">
+              <td>${esc(p.full_name)}</td><td class="muted">${esc(p.email)}</td>
+              <td>${esc(fmtDateTime(p.deactivated_at))}</td>
+              <td class="right"><button class="btn small p-reactivate" data-name="${esc(p.full_name || p.email)}">Reactivate</button></td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+        </details>
       </section>` : ''}
 
       <section class="card">
-        <h2>Special duties</h2>
-        <p class="muted">Grant and automatic overtime lines such as K9, DEA or Supervisor. <strong>Timesheet line</strong> and <strong>Note</strong> print on the timesheet. <strong>Auto hours</strong> are filled in for the person each pay period (they can change them). <strong>Everyone</strong> shows the line on every timesheet. Turn off <strong>Active</strong> to retire a duty — past timesheets keep it.</p>
-        <div class="table-wrap"><table class="list duties">
-          <thead><tr><th>Short name</th><th>Timesheet line</th><th>Note</th><th>Auto hours</th><th>Everyone</th><th>Active</th><th></th></tr></thead>
-          <tbody>
-            ${duties.map((d) => dutyRow(d)).join('')}
-            ${dutyRow({ id: '', name: '', label: '', note: '', default_hours: 0, everyone: false, active: true })}
-          </tbody>
-        </table></div>
+        <details class="fold">
+          <summary><h2>Special duties setup</h2></summary>
+          <p class="muted">Grant and automatic overtime lines such as K9, DEA or Supervisor. <strong>Timesheet line</strong> and <strong>Note</strong> print on the timesheet. <strong>Auto hours</strong> are filled in for the person each pay period (they can change them). <strong>Everyone</strong> shows the line on every timesheet. Turn off <strong>Active</strong> to retire a duty — past timesheets keep it. Give people a duty with <strong>Edit</strong> next to their name.</p>
+          <div class="table-wrap"><table class="list duties">
+            <thead><tr><th>Short name</th><th>Timesheet line</th><th>Note</th><th>Auto hours</th><th>Everyone</th><th>Active</th><th></th></tr></thead>
+            <tbody>
+              ${duties.map((d) => dutyRow(d)).join('')}
+              ${dutyRow({ id: '', name: '', label: '', note: '', default_hours: 0, everyone: false, active: true })}
+            </tbody>
+          </table></div>
+        </details>
       </section>`;
+
+    // Search / filter without reloading
+    const applyFilter = () => {
+      let shown = 0;
+      $$('.team-list tbody tr', el).forEach((tr) => {
+        const ok = matches(state.people[tr.dataset.id] || {});
+        tr.hidden = !ok;
+        if (ok) shown++;
+      });
+      $('#tm-none').hidden = shown > 0;
+    };
+    $('#tm-q').oninput = (e) => { tf.q = e.target.value; applyFilter(); };
+    $('#tm-show').onchange = (e) => { tf.show = e.target.value; applyFilter(); };
+    applyFilter();
 
     $('#invite-form').onsubmit = (e) => {
       e.preventDefault();
@@ -2282,64 +2313,106 @@
       });
     };
 
-    $$('.p-save', el).forEach((b) => {
-      b.onclick = () => {
-        const tr = b.closest('tr');
-        const id = tr.dataset.id;
-        const before = state.people[id] || {};
+    // One person's settings, in a pop-up
+    const editPerson = (p) => {
+      const self = p.id === me();
+      const dutyBoxes = active.length ? active.map((d) => d.everyone
+        ? `<span class="chip muted-chip" title="Shown on everyone’s timesheet">${esc(d.name)} (all)</span>`
+        : `<label class="chip-check"><input type="checkbox" data-duty="${d.id}" ${has.has(`${p.id}|${d.id}`) ? 'checked' : ''}><span>${esc(d.name)}</span></label>`).join('')
+        : '<span class="muted">None set up yet (see Special duties setup).</span>';
+      openModal(`
+        <h2 class="modal-head">${esc(p.full_name || p.email)}</h2>
+        <form id="person-form" autocomplete="off">
+          <div class="row">
+            <label>Name (prints on timesheets)<input name="full_name" value="${esc(p.full_name)}" required></label>
+            <label>Role<select name="role" ${self ? 'disabled title="You can’t change your own role"' : ''}>
+              <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
+              <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
+            </select></label>
+          </div>
+          <p class="muted" style="margin-top:-.4rem">${esc(p.email)}</p>
+
+          <fieldset class="person-set">
+            <legend>Special duties</legend>
+            <div class="duty-checks">${dutyBoxes}</div>
+          </fieldset>
+
+          <fieldset class="person-set">
+            <legend>Patrol stats</legend>
+            <label class="check"><input type="checkbox" name="patrol" ${p.patrol ? 'checked' : ''}> <span><strong>Patrol</strong> — logs stats and shows up in them</span></label>
+            <div class="row">
+              <label>Shift<select name="shift"><option value="">No shift</option>${SHIFTS.map((x) => `<option value="${x}" ${p.shift === x ? 'selected' : ''}>${x} Shift</option>`).join('')}</select></label>
+              <label>Supervisor<select name="reports_to"><option value="">No supervisor</option>${supervisors.filter((x) => x.id !== p.id).map((x) =>
+                `<option value="${x.id}" ${p.reports_to === x.id ? 'selected' : ''}>${esc(x.full_name || x.email)}</option>`).join('')}</select></label>
+            </div>
+            <label class="check"><input type="checkbox" name="is_supervisor" ${p.is_supervisor ? 'checked' : ''}> <span><strong>Supervisor</strong> — sees the stats of deputies who report to them</span></label>
+          </fieldset>
+
+          <div class="actions">
+            <button class="btn primary" type="submit">Save</button>
+            <button class="btn" type="button" id="person-cancel">Cancel</button>
+            ${self ? '' : `<button class="btn danger" type="button" id="person-deactivate" style="margin-left:auto">Deactivate</button>`}
+          </div>
+        </form>`);
+
+      const f = $('#person-form');
+      $('#person-cancel').onclick = closeModal;
+      f.onsubmit = (e) => {
+        e.preventDefault();
         const update = {
-          full_name: $('.p-name', tr).value.trim(),
-          patrol: $('.p-patrol', tr).checked,
-          shift: $('.p-shift', tr).value || null,
-          is_supervisor: $('.p-sup', tr).checked,
-          reports_to: $('.p-boss', tr).value || null
+          full_name: f.full_name.value.trim(),
+          patrol: f.patrol.checked,
+          shift: f.shift.value || null,
+          is_supervisor: f.is_supervisor.checked,
+          reports_to: f.reports_to.value || null
         };
-        const supChanged = update.is_supervisor !== !!before.is_supervisor;
-        if (id !== me()) update.role = $('.p-role', tr).value;
-        const checks = $$('input[data-duty]', tr);
-        const add = checks.filter((c) => c.checked && !has.has(`${id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
-        const remove = checks.filter((c) => !c.checked && has.has(`${id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
-        withBusy(b, async () => {
+        if (!self) update.role = f.role.value;
+        const checks = $$('input[data-duty]', f);
+        const add = checks.filter((c) => c.checked && !has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
+        const remove = checks.filter((c) => !c.checked && has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
+        withBusy(f.querySelector('[type=submit]'), async () => {
           if (!update.full_name) throw new Error('Name can’t be empty.');
-          const { error } = await sb.from('profiles').update(update).eq('id', id);
+          const { error } = await sb.from('profiles').update(update).eq('id', p.id);
           if (error) throw error;
           if (add.length) {
-            const r = await sb.from('profile_duties').insert(add.map((duty_id) => ({ user_id: id, duty_id })));
+            const r = await sb.from('profile_duties').insert(add.map((duty_id) => ({ user_id: p.id, duty_id })));
             if (r.error) throw r.error;
           }
           if (remove.length) {
-            const r = await sb.from('profile_duties').delete().eq('user_id', id).in('duty_id', remove);
+            const r = await sb.from('profile_duties').delete().eq('user_id', p.id).in('duty_id', remove);
             if (r.error) throw r.error;
           }
-          add.forEach((d) => has.add(`${id}|${d}`));
-          remove.forEach((d) => has.delete(`${id}|${d}`));
-          if (id === me()) {
-            const hadStats = canSeeStats();
-            Object.assign(state.profile, update);
-            if (hadStats !== canSeeStats()) { toast('Saved.'); renderShell(); return; }
+          if (p.is_supervisor && !update.is_supervisor) {
+            // no longer a supervisor: their deputies now report to no one
+            const r = await sb.from('profiles').update({ reports_to: null }).eq('reports_to', p.id);
+            if (r.error) throw r.error;
           }
+          if (self) Object.assign(state.profile, update);
+          closeModal();
           toast('Saved.');
-          await loadPeople();
-          if (supChanged) showView('team');   // refresh the supervisor lists
+          showView('team');
         });
       };
-    });
+      $('#person-deactivate')?.addEventListener('click', (e) => setActive(e.target, p, false));
+    };
 
-    const setActive = (b, activeFlag) => {
-      const id = b.closest('tr').dataset.id;
+    const setActive = (b, p, activeFlag) => {
+      const name = p.full_name || p.email;
       const msg = activeFlag
-        ? `Reactivate ${b.dataset.name}? They’ll be able to sign in and submit timesheets again.`
-        : `Deactivate ${b.dataset.name}?\n\nThey’ll be locked out right away. Their timesheets and time off are kept. Any timesheet or time off they already submitted stays in Approvals so you can still approve their final pay.`;
+        ? `Reactivate ${name}? They’ll be able to sign in and submit timesheets again.`
+        : `Deactivate ${name}?\n\nThey’ll be locked out right away. Their timesheets and time off are kept. Any timesheet or time off they already submitted stays in Approvals so you can still approve their final pay.`;
       if (!confirm(msg)) return;
       withBusy(b, async () => {
-        const { error } = await sb.from('profiles').update({ active: activeFlag }).eq('id', id);
+        const { error } = await sb.from('profiles').update({ active: activeFlag }).eq('id', p.id);
         if (error) throw error;
+        closeModal();
         toast(activeFlag ? 'Reactivated.' : 'Deactivated.');
         showView('team');
       });
     };
-    $$('.p-deactivate', el).forEach((b) => { b.onclick = () => setActive(b, false); });
-    $$('.p-reactivate', el).forEach((b) => { b.onclick = () => setActive(b, true); });
+
+    $$('.p-edit', el).forEach((b) => { b.onclick = () => editPerson(state.people[b.closest('tr').dataset.id]); });
+    $$('.p-reactivate', el).forEach((b) => { b.onclick = () => setActive(b, state.people[b.closest('tr').dataset.id], true); });
 
     $$('.d-save', el).forEach((b) => {
       b.onclick = () => {
@@ -2361,10 +2434,12 @@
             : await sb.from('duties').insert(row);
           if (res.error) throw res.error.code === '23505' ? new Error('There’s already a duty with that short name.') : res.error;
           toast(tr.dataset.id ? 'Duty saved.' : 'Duty added.');
+          state.teamOpenDuties = true;
           showView('team');
         });
       };
     });
+    if (state.teamOpenDuties) { const d = $$('details.fold', el).pop(); if (d) d.open = true; state.teamOpenDuties = false; }
   };
 
   function dutyRow(d) {
