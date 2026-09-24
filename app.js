@@ -1299,7 +1299,7 @@
       <form id="ev-form" autocomplete="off">
         <div class="row">
           <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court"></label>
+          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. Court, Meeting, etc."></label>
         </div>
         <label class="check not-holiday"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
         <div class="holiday-only notice"><label style="margin:0">Paid holiday hours<input type="number" name="holiday_hours" min="0" max="24" step="0.25" value="${e.holiday_hours ?? 8}" style="max-width:110px"></label>
@@ -2237,7 +2237,7 @@
         <details class="fold">
           <summary><h2>Invite someone</h2></summary>
           <form id="invite-form" class="row end" autocomplete="off">
-            <label>Full name<input name="full_name" required placeholder="e.g. Caleb Hill"></label>
+            <label>Full name<input name="full_name" required placeholder="e.g. John Smith"></label>
             <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
             <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
             <button class="btn primary" type="submit">Send invite</button>
