@@ -489,15 +489,16 @@
     return `<select class="t-type" aria-label="Type of time"><option value="">Regular</option>${extra}${segDuties.map((d) =>
       `<option value="${d.id}" ${d.id === value ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select>`;
   }
+  const monthDay = (iso) => { const d = parseDate(iso); return `${d.getMonth() + 1}/${d.getDate()}`; };
   function segRow(iso, e = {}, first = true) {
     return `<tr class="seg ${first ? 'seg-first' : 'seg-extra'}" data-date="${iso}" data-label="${esc(fmtShort(iso))}">
       <td class="day">${first
-        ? `<strong>${esc(fmtShort(iso))}</strong><span>${esc(fmtDay(iso))}</span><button type="button" class="add-seg">+ Add time</button>`
-        : `<span class="seg-more">↳ more time</span><button type="button" class="del-seg" aria-label="Remove this time">Remove</button>`}</td>
+        ? `<span class="d-date"><span class="d-wd">${esc(fmtDay(iso))}</span> <strong>${esc(monthDay(iso))}</strong></span><button type="button" class="add-seg" title="Add another block of time on this day" aria-label="Add time on ${esc(fmtShort(iso))}">+</button>`
+        : `<span class="seg-more">↳ more</span><button type="button" class="del-seg" title="Remove this block of time" aria-label="Remove this time">✕</button>`}</td>
       <td>${timeSelect('t-in', e.in || '', 'Time in')}</td>
       <td>${timeSelect('t-out', e.out || '', 'Time out')}</td>
       <td class="num t-hours"></td>
-      <td><div class="expl-wrap">${typeSelect(e.duty_id || '')}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (overtime, absence…)" aria-label="Explanation"></div></td>
+      <td><div class="expl-wrap">${typeSelect(e.duty_id || '')}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (OT, absence…)" aria-label="Explanation"></div></td>
     </tr>`;
   }
   function buildRows(start, entries = []) {
@@ -551,6 +552,7 @@
     } else warn.classList.add('hidden');
   }
 
+  const TS_RECENT = 4;   // how many past timesheets to list before "Show all"
   views.timesheets = async (el) => {
     const [{ data: mine, error }, , assigned] = await Promise.all([
       sb.from('timesheets').select('*').eq('user_id', me()).order('period_start', { ascending: false }),
@@ -582,7 +584,7 @@
             <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
             <tbody id="ts-rows"></tbody>
           </table></div>
-          <p class="hint">Times are in 15-minute steps, and overnight shifts are handled automatically. Worked more than one block in a day (e.g. your shift, then traffic OT)? Click <strong>+ Add time</strong> under the date${'${segDuties.length ? " and set the block’s type (e.g. Traffic OT) — those hours go on that line below instead of Hours Worked" : ""}'}. Other hours go in quarter-hour steps (for example 4, 4.25 or 4.5).</p>
+          <p class="hint">Overnight shifts are handled automatically. Worked more than one block in a day? Tap <strong>+</strong> next to the date${segDuties.length ? ' and pick the block’s type (e.g. Traffic OT) — those hours go on that line below' : ''}.</p>
 
           <div class="table-wrap"><table class="grid extras">
             <tbody>
@@ -615,9 +617,18 @@
           <button class="btn primary" type="submit" id="ts-submit">Sign &amp; submit</button>
         </form>
       </section>
-      <section class="card"><h2>My timesheets</h2>${timesheetTable(mine, false)}</section>`;
+      <section class="card"><h2>My timesheets <span class="count muted-count">${mine.length}</span></h2>
+        <div id="ts-list">${timesheetTable(mine.slice(0, TS_RECENT), false)}</div>
+        ${mine.length > TS_RECENT ? `<button class="btn small" type="button" id="ts-all">Show all ${mine.length}</button>` : ''}
+      </section>`;
 
     bindTimesheetButtons(el, mine);
+    $('#ts-all')?.addEventListener('click', (e) => {
+      $('#ts-list').innerHTML = timesheetTable(mine, false);
+      labelTables($('#ts-list'));
+      bindTimesheetButtons($('#ts-list'), mine);
+      e.target.remove();
+    });
     const pad = createSignaturePad($('#sig'));
     $('#sig-clear').onclick = () => pad.clear();
     $('#ts-form').addEventListener('input', (e) => { if (!e.target.closest('.sign')) recalc(); });
