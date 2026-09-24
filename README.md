@@ -54,12 +54,12 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 ## How it works
 
 **Employees**
-- *My Timesheets:* pick the pay period, enter time in/out (overnight shifts are handled) and any explanation for each day, fill in vacation / holiday / sick / traffic OT / K9 hours, sign, type their name, check the box, submit. Totals are figured automatically (and re-checked by the database). They can resubmit (with a new signature) until it's approved. If a manager sends it back, the note shows at the top.
+- *My Timesheets:* a day can have more than one block of time (**+ Add time** under the date), e.g. 07:00–19:00 regular and 19:00–21:00 Traffic OT. A block's type can be Regular or one of the person's special duties; those hours go on that duty's line instead of Hours Worked, and the line fills itself in. Overlapping blocks are caught. Pick the pay period, enter time in/out (overnight shifts are handled) and any explanation for each day, fill in vacation / holiday / sick / traffic OT / K9 hours, sign, type their name, check the box, submit. Totals are figured automatically (and re-checked by the database). They can resubmit (with a new signature) until it's approved. If a manager sends it back, the note shows at the top.
 - *Time Off:* pick type and dates, submit. They can cancel while it's still pending.
 
 **Calendar (everyone; the first tab)**
 - **Announcements** and **Training announcements** at the top (managers post, pin, set "show until", edit or delete).
-- A month **calendar** of trainings, court dates and other events. Managers add events and tag the deputies on them (e.g. who's subpoenaed). Your own events are outlined in red. On a phone, tap a day to see its events.
+- A month **calendar**. Deputies see only **their own** events (the ones they're tagged on) plus anything marked **Show to everyone**; this is enforced by the database. Managers see all events and can switch to **Just mine**. When adding an event, managers tag deputies (**Select all** / **Clear** helpers) or tick **Show to everyone**. Your own events are outlined in red. On a phone, tap a day to see its events.
 - **Coming up**: the next 45 days as a list.
 
 **Off-Duty Jobs (everyone)**
@@ -95,6 +95,30 @@ Managers can invite people from the **Team** tab (name, email, role → **Send i
 1. Supabase → **Edge Functions** → **Deploy a new function** → **Via Editor**.
 2. Name it exactly **`invite-user`**.
 3. Delete the sample code, paste in all of `supabase-invite-function.ts`, and click **Deploy**.
-4. Leave its JWT / "Verify JWT" setting on (the default).
+4. Turn **off** its "Verify JWT" / "Enforce JWT verification" setting. The function checks for itself that the caller is a signed-in, active manager, and the built-in check can wrongly reject logins on newer projects.
 
 The function only works for signed-in, active managers. The person's name is saved to their profile and can be used in the invite email as `{{ .Data.full_name }}` (the template in `email-templates.html` already does this). You can still invite from the Supabase dashboard too; those invites just won't include a name.
+
+## Email alerts (one-time setup)
+
+The site emails people when something involves them:
+
+| When | Who gets it |
+|---|---|
+| Off-duty request approved / declined | That deputy |
+| Someone requests an off-duty job | Managers |
+| New off-duty job posted ("Email everyone" box, on by default) | Everyone |
+| Added to a court date / training / event | Those deputies |
+| An event they're on changes time or place, or is deleted | Those deputies |
+| New announcement ("Also email this to everyone" box, off by default) | Everyone |
+| Time off approved / denied | That employee |
+| Timesheet sent back | That employee |
+
+Setup (uses your Resend account, with ccsoportal.com verified):
+1. Supabase → **Edge Functions** → **Deploy a new function** → **Via Editor** → name it **`notify`** → paste all of `supabase-notify-function.ts` → **Deploy**, then turn **off** its "Verify JWT" setting (the function checks who's calling itself).
+2. Supabase → **Edge Functions** → **Secrets** → add:
+   - `RESEND_API_KEY`: a Resend API key with Sending access (you can reuse the one from SMTP)
+   - `MAIL_FROM`: `Cleburne County Sheriff's Office <noreply@ccsoportal.com>`
+   - `SITE_URL`: `https://ccsoportal.com/`
+
+If alerts aren't set up, everything still saves; the site shows a one-time note that the email couldn't be sent. Deactivated people never get emails.

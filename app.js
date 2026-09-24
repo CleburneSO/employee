@@ -29,7 +29,7 @@
   let mustSetPassword = linkType === 'invite' || linkType === 'recovery';
 
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const state = { session: null, profile: null, view: 'calendar', month: null, dir: {}, people: {}, duties: [], filterUser: '', cases: { year: null, q: '', page: 0 } };
+  const state = { session: null, profile: null, view: 'calendar', month: null, calMine: false, dir: {}, people: {}, duties: [], filterUser: '', cases: { year: null, q: '', page: 0 } };
   let loadedUserId = null;
 
   const TIME_OFF_TYPES = [
@@ -69,7 +69,9 @@
   const isManager = () => state.profile?.role === 'manager';
   const round2 = (n) => Math.round(n * 100) / 100;
   const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
-  const hrs = (v) => Number(v || 0).toFixed(2);
+  const hrs = (v) => String(Number(Number(v || 0).toFixed(2)));   // 12, 12.5, 0.5
+  // "18:00" -> "6p", "06:30" -> "6:30a" (how times are written on the paper forms)
+  const clock = (v) => { if (!v) return ''; const [h, m] = v.split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''}${h < 12 ? 'a' : 'p'}`; };
 
   const parseDate = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
   const isoDate = (d) =>
@@ -392,32 +394,50 @@
     return mins / 60;
   }
 
-  // Times are kept in 30-minute steps: 00:00, 00:30 … 23:30
-  const HALF_HOURS = [...Array(48)].map((_, i) => {
-    const h = Math.floor(i / 2), m = i % 2 ? '30' : '00';
+  // Times are kept in 15-minute steps: 00:00, 00:15 … 23:45
+  const HALF_HOURS = [...Array(96)].map((_, i) => {
+    const h = Math.floor(i / 4), m = String((i % 4) * 15).padStart(2, '0');
     const v = `${String(h).padStart(2, '0')}:${m}`;
-    const label = `${h % 12 || 12}:${m} ${h < 12 ? 'AM' : 'PM'}`;
-    return [v, label];
+    return [v, clock(v)];
   });
-  const isHalfHourTime = (v) => /^([01]\d|2[0-3]):(00|30)$/.test(v);
-  const isHalfStep = (n) => Math.abs(n * 2 - Math.round(n * 2)) < 1e-9;
+  const isHalfHourTime = (v) => /^([01]\d|2[0-3]):(00|15|30|45)$/.test(v);
+  const isHalfStep = (n) => Math.abs(n * 4 - Math.round(n * 4)) < 1e-9;   // quarter hours
   function timeSelect(cls, value, label) {
     const extra = value && !isHalfHourTime(value) ? `<option value="${esc(value)}" selected>${esc(value)} (fix)</option>` : '';
     return `<select class="${cls}" aria-label="${label}"><option value=""></option>${extra}${HALF_HOURS.map(([v, l]) =>
       `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   }
 
+  // One row per block of time. A day can have several blocks (e.g. regular shift + Traffic OT).
+  let segDuties = [];   // special duties this person can mark a block with
+  function typeSelect(value) {
+    if (!segDuties.length && !value) return '';
+    const known = segDuties.some((d) => d.id === value);
+    const extra = value && !known ? `<option value="${esc(value)}" selected>${esc(state.duties.find((d) => d.id === value)?.name || 'Special')}</option>` : '';
+    return `<select class="t-type" aria-label="Type of time"><option value="">Regular</option>${extra}${segDuties.map((d) =>
+      `<option value="${d.id}" ${d.id === value ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select>`;
+  }
+  function segRow(iso, e = {}, first = true) {
+    return `<tr class="seg ${first ? 'seg-first' : 'seg-extra'}" data-date="${iso}" data-label="${esc(fmtShort(iso))}">
+      <td class="day">${first
+        ? `<strong>${esc(fmtShort(iso))}</strong><span>${esc(fmtDay(iso))}</span><button type="button" class="add-seg">+ Add time</button>`
+        : `<span class="seg-more">↳ more time</span><button type="button" class="del-seg" aria-label="Remove this time">Remove</button>`}</td>
+      <td>${timeSelect('t-in', e.in || '', 'Time in')}</td>
+      <td>${timeSelect('t-out', e.out || '', 'Time out')}</td>
+      <td class="num t-hours"></td>
+      <td><div class="expl-wrap">${typeSelect(e.duty_id || '')}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (overtime, absence…)" aria-label="Explanation"></div></td>
+    </tr>`;
+  }
   function buildRows(start, entries = []) {
     $('#ts-rows').innerHTML = periodDays(start).map((iso) => {
-      const e = entries.find((x) => x.date === iso) || {};
-      return `<tr data-date="${iso}" data-label="${esc(fmtShort(iso))}">
-        <td class="day"><strong>${esc(fmtShort(iso))}</strong><span>${esc(fmtDay(iso))}</span></td>
-        <td>${timeSelect('t-in', e.in || '', 'Time in')}</td>
-        <td>${timeSelect('t-out', e.out || '', 'Time out')}</td>
-        <td class="num t-hours"></td>
-        <td><input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (overtime, absence…)" aria-label="Explanation"></td>
-      </tr>`;
+      const segs = entries.filter((x) => x.date === iso);
+      return (segs.length ? segs : [{}]).map((e, i) => segRow(iso, e, i === 0)).join('');
     }).join('');
+  }
+  function segMinutes(i, o) {
+    const [ih, im] = i.split(':').map(Number), [oh, om] = o.split(':').map(Number);
+    const s = ih * 60 + im; let e = oh * 60 + om; if (e <= s) e += 1440;
+    return [s, e];
   }
 
   function readExtras() {
@@ -430,10 +450,21 @@
 
   function recalc() {
     let worked = 0;
+    const fromTimes = {};   // duty id -> hours from blocks marked with it
     $$('#ts-rows tr').forEach((tr) => {
       const h = calcHours($('.t-in', tr).value, $('.t-out', tr).value);
-      $('.t-hours', tr).textContent = h ? h.toFixed(2) : '';
-      worked += round2(h);
+      const type = $('.t-type', tr)?.value || '';
+      $('.t-hours', tr).textContent = h ? hrs(h) : '';
+      tr.classList.toggle('is-duty', !!type);
+      if (type) fromTimes[type] = (fromTimes[type] || 0) + round2(h);
+      else worked += round2(h);
+    });
+    // A duty line with time blocks is filled in from those blocks
+    $$('.duty-input').forEach((i) => {
+      const auto = Object.prototype.hasOwnProperty.call(fromTimes, i.dataset.duty);
+      if (auto) i.value = fromTimes[i.dataset.duty] || '';
+      i.readOnly = auto;
+      i.closest('tr').classList.toggle('from-times', auto);
     });
     const x = readExtras();
     const special = readDuties().reduce((a, d) => a + d.hours, 0);
@@ -457,6 +488,7 @@
     if (error) throw error;
     const myIds = new Set(assigned.map((a) => a.duty_id));
     const myDuties = state.duties.filter((d) => d.active && (d.everyone || myIds.has(d.id)));
+    segDuties = myDuties;
 
     el.innerHTML = `
       <section class="card">
@@ -470,20 +502,20 @@
             <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
             <tbody id="ts-rows"></tbody>
           </table></div>
-          <p class="hint">Times are in 30-minute steps. Hours are figured from time in and time out, and overnight shifts are handled automatically. Other hours go in half-hour steps (for example 4 or 4.5).</p>
+          <p class="hint">Times are in 15-minute steps, and overnight shifts are handled automatically. Worked more than one block in a day (e.g. your shift, then traffic OT)? Click <strong>+ Add time</strong> under the date${'${segDuties.length ? " and set the block’s type (e.g. Traffic OT) — those hours go on that line below instead of Hours Worked" : ""}'}. Other hours go in quarter-hour steps (for example 4, 4.25 or 4.5).</p>
 
           <div class="table-wrap"><table class="grid extras">
             <tbody>
-              <tr class="total"><th>Total Hours Worked</th><td class="num" id="ts-total">0.00</td><td class="hint">This is the number of hours you actually worked.</td></tr>
+              <tr class="total"><th>Total Hours Worked</th><td class="num" id="ts-total">0</td><td class="hint">This is the number of hours you actually worked.</td></tr>
               ${EXTRA_HOURS.map(([k, label, hint]) => `<tr>
                 <th><label for="x-${k}">${esc(label)}</label></th>
-                <td><input type="number" id="x-${k}" min="0" step="0.5" placeholder="0" inputmode="decimal"></td>
+                <td><input type="number" id="x-${k}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
                 <td class="hint">${esc(hint)}</td></tr>`).join('')}
               ${myDuties.map((d) => `<tr class="duty-row">
                 <th><label for="d-${d.id}">${esc(d.label)}</label> <span class="chip">${esc(d.name)}</span></th>
-                <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" min="0" step="0.5" placeholder="0" inputmode="decimal"></td>
-                <td class="hint">${esc(d.note)}</td></tr>`).join('')}
-              <tr class="total"><th>Total Hours To Be Paid</th><td class="num" id="ts-paid">0.00</td><td></td></tr>
+                <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
+                <td class="hint">${esc(d.note)}<span class="auto-note">Filled in from your ${esc(d.name)} time blocks above.</span></td></tr>`).join('')}
+              <tr class="total"><th>Total Hours To Be Paid</th><td class="num" id="ts-paid">0</td><td></td></tr>
             </tbody>
           </table></div>
           <div id="ts-warn" class="notice warn hidden"></div>
@@ -509,6 +541,20 @@
     const pad = createSignaturePad($('#sig'));
     $('#sig-clear').onclick = () => pad.clear();
     $('#ts-form').addEventListener('input', (e) => { if (!e.target.closest('.sign')) recalc(); });
+    $('#ts-rows').addEventListener('click', (e) => {
+      const add = e.target.closest('.add-seg'), del = e.target.closest('.del-seg');
+      if (add) {
+        const iso = add.closest('tr').dataset.date;
+        const rowsOfDay = $$(`#ts-rows tr[data-date="${iso}"]`);
+        const prev = rowsOfDay[rowsOfDay.length - 1];
+        prev.insertAdjacentHTML('afterend', segRow(iso, { in: $('.t-out', prev).value || '' }, false));
+        prev.nextElementSibling.querySelector('.t-out').focus();
+        recalc();
+      } else if (del) {
+        del.closest('tr').remove();
+        recalc();
+      }
+    });
 
     const periodInput = $('#ts-period');
     let existing = null;
@@ -546,20 +592,32 @@
       e.preventDefault();
       withBusy($('#ts-submit'), async () => {
         const entries = [];
+        const blocksByDay = {};
         for (const tr of $$('#ts-rows tr')) {
           const i = $('.t-in', tr).value, o = $('.t-out', tr).value;
           const expl = $('.t-expl', tr).value.trim();
+          const type = $('.t-type', tr)?.value || '';
           if ((i && !o) || (!i && o)) throw new Error(`Enter both time in and time out for ${tr.dataset.label}.`);
-          if ((i && !isHalfHourTime(i)) || (o && !isHalfHourTime(o))) throw new Error(`Times must be on the hour or half hour — check ${tr.dataset.label}.`);
+          if ((i && !isHalfHourTime(i)) || (o && !isHalfHourTime(o))) throw new Error(`Times must be in 15-minute steps (:00, :15, :30 or :45) — check ${tr.dataset.label}.`);
           if (!i && !expl) continue;
-          entries.push({ date: tr.dataset.date, in: i, out: o, hours: round2(calcHours(i, o)), explanation: expl });
+          if (!i && type) throw new Error(`Add times for the ${segDuties.find((d) => d.id === type)?.name || 'special'} block on ${tr.dataset.label}.`);
+          const entry = { date: tr.dataset.date, in: i, out: o, hours: round2(calcHours(i, o)), explanation: expl };
+          if (type) entry.duty_id = type;
+          entries.push(entry);
+          if (i) (blocksByDay[tr.dataset.date] ||= []).push({ label: tr.dataset.label, m: segMinutes(i, o) });
+        }
+        for (const blocks of Object.values(blocksByDay)) {
+          blocks.sort((p, q) => p.m[0] - q.m[0]);
+          for (let k = 1; k < blocks.length; k++) {
+            if (blocks[k].m[0] < blocks[k - 1].m[1]) throw new Error(`Two time blocks overlap on ${blocks[k].label}. Check the times.`);
+          }
         }
         const extras = readExtras();
         const duty_hours = readDuties();
         const badExtra = EXTRA_HOURS.find(([k]) => !isHalfStep(extras[k]));
-        if (badExtra) throw new Error(`${badExtra[1]} must be in half-hour steps (for example 4 or 4.5).`);
+        if (badExtra) throw new Error(`${badExtra[1]} must be in quarter-hour steps (for example 4, 4.25 or 4.5).`);
         const badDuty = duty_hours.find((d) => !isHalfStep(d.hours));
-        if (badDuty) throw new Error(`${state.duties.find((x) => x.id === badDuty.duty_id)?.label || 'Special duty hours'} must be in half-hour steps (for example 4 or 4.5).`);
+        if (badDuty) throw new Error(`${state.duties.find((x) => x.id === badDuty.duty_id)?.label || 'Special duty hours'} must be in quarter-hour steps (for example 4, 4.25 or 4.5).`);
         const anyHours = entries.some((x) => x.hours > 0) || Object.values(extras).some((v) => v > 0)
           || duty_hours.some((d) => d.hours > 0);
         if (!anyHours) throw new Error('Enter at least one day worked or some vacation, holiday or sick hours.');
@@ -616,20 +674,29 @@
   function sheetHTML(t) {
     const sigOk = typeof t.signature_data === 'string' && t.signature_data.startsWith('data:image/png;base64,');
     const blankIfZero = (v) => Number(v) ? hrs(v) : '';
+    const dutyName = (id) => (t.duty_hours || []).find((d) => d.duty_id === id)?.name || state.duties.find((d) => d.id === id)?.name || 'Special';
     const dayRows = periodDays(t.period_start).map((iso) => {
-      const e = (t.entries || []).find((x) => x.date === iso) || {};
-      return `<tr class="d">
+      const segs = (t.entries || []).filter((x) => x.date === iso);
+      const timed = segs.filter((x) => x.in);
+      const lines = (f) => timed.map(f).join('<br>');
+      const expl = segs.map((x) => {
+        const tag = x.duty_id ? `<strong>${esc(dutyName(x.duty_id))}${x.in ? ` ${esc(clock(x.in))}–${esc(clock(x.out))}` : ''}</strong>` : '';
+        return [tag, esc(x.explanation || '')].filter(Boolean).join(' — ');
+      }).filter(Boolean).join('; ');
+      return `<tr class="d ${timed.length > 1 ? 'multi' : ''}">
         <td class="c-date">${esc(fmtShort(iso))}</td>
-        <td class="c">${esc(e.in || '')}</td>
-        <td class="c">${esc(e.out || '')}</td>
-        <td class="c">${e.hours ? hrs(e.hours) : ''}</td>
-        <td class="c-expl">${esc(e.explanation || '')}</td></tr>`;
+        <td class="c">${lines((x) => esc(clock(x.in)))}</td>
+        <td class="c">${lines((x) => esc(clock(x.out)))}</td>
+        <td class="c">${lines((x) => (x.duty_id ? `<span class="seg-duty">${hrs(x.hours)}*</span>` : hrs(x.hours)))}</td>
+        <td class="c-expl">${expl}</td></tr>`;
     }).join('');
+    const hasDutyBlocks = (t.entries || []).some((x) => x.duty_id);
     const sumRow = (label, value, note, cls = '') =>
       `<tr class="s ${cls}"><th colspan="3">${esc(label)}</th><td class="c">${value}</td><td class="s-note">${esc(note)}</td></tr>`;
     const duties = dutyLines(t);
     const special = duties.filter((d) => d.hours > 0);
-    const compact = duties.length > 3 ? ' compact' : '';
+    const extraLines = duties.length + (special.length ? 1 : 0) + (hasDutyBlocks ? 1 : 0);
+    const compact = extraLines > 5 ? ' compact tight' : extraLines > 3 ? ' compact' : '';
 
     return `<div class="sheet${compact}">
       <div class="sheet-head">
@@ -649,6 +716,7 @@
           ${sumRow('Total Hours To Be Paid', hrs(t.total_paid_hours), '')}
         </tbody>
       </table>
+      ${hasDutyBlocks ? '<div class="sheet-foot">* Special-duty hours (shown in the explanation). They are totaled on their own line above, not in Total Hours Worked.</div>' : ''}
       <div class="sheet-sign">
         <div class="red">${esc(SIGN_STATEMENT)}</div>
         <div class="sig-line">
@@ -684,6 +752,8 @@
       const { error } = await sb.from(table)
         .update({ status, manager_note: $('#rv-note').value.trim() || null }).eq('id', id);
       if (error) throw error;
+      if (table === 'time_off_requests') notify('timeoff_decision', id);
+      else if (status === 'rejected') notify('timesheet_returned', id);
       closeModal();
       toast(status === 'approved' ? 'Approved.' : 'Sent back to employee.');
       showView(state.view);
@@ -894,17 +964,49 @@
             Number(t.total_hours), ...extraVals(t), ...dutyVals, Number(t.total_paid_hours), t.status, t.signed_name, t.signed_at]);
         }
       } else {
-        rows = [['Employee', 'Email', 'Date', 'Time in', 'Time out', 'Hours', 'Explanation', 'Status']];
+        rows = [['Employee', 'Email', 'Date', 'Time in', 'Time out', 'Hours', 'Type', 'Explanation', 'Status']];
         for (const t of data) {
           for (const en of t.entries || []) {
+            const type = en.duty_id ? ((t.duty_hours || []).find((d) => d.duty_id === en.duty_id)?.name || 'Special') : 'Regular';
             rows.push([personName(t.user_id), state.people[t.user_id]?.email || '', en.date,
-              en.in, en.out, en.hours, en.explanation || '', t.status]);
+              en.in, en.out, en.hours, type, en.explanation || '', t.status]);
           }
         }
       }
       downloadCSV(`timesheets_${p}_to_${periodEnd(p)}.csv`, rows);
     });
   };
+
+  // Turns a Supabase Edge Function error into a plain-English message
+  async function functionError(error, name) {
+    const res = error.context;
+    if (res && typeof res.status === 'number') {
+      let body = '';
+      try { body = await res.clone().text(); } catch (_) { /* no body */ }
+      let detail = body;
+      try { const j = JSON.parse(body); detail = j.error || j.message || j.msg || body; } catch (_) { /* not JSON */ }
+      if (res.status === 404) return `Supabase can’t find a function named “${name}”. Check it’s deployed with exactly that name.`;
+      if (res.status === 401 && /jwt|authorization/i.test(detail)) return `Supabase blocked the request (“${detail}”). Turn off “Verify JWT” for the ${name} function.`;
+      return `${detail || error.message} (status ${res.status})`;
+    }
+    // No response at all: network problem, wrong project URL, or function missing
+    return `Couldn’t reach the “${name}” function (${error.message}). Check it’s deployed in the same Supabase project as SUPABASE_URL in config.js, and that “Verify JWT” is off.`;
+  }
+
+  /* ---------------- email alerts ---------------- */
+  // Tells the "notify" Edge Function what happened; it looks up the details and sends the emails.
+  // Never blocks the action itself — if alerts aren't set up yet, it says so once.
+  let alertWarned = false;
+  async function notify(type, id, extra = {}) {
+    try {
+      const { data, error } = await sb.functions.invoke('notify', { body: { type, id, ...extra } });
+      if (error) throw new Error(await functionError(error, 'notify'));
+      return data;
+    } catch (err) {
+      console.warn('Email alert not sent:', err.message);
+      if (!alertWarned) { alertWarned = true; setTimeout(() => toast('Saved — but the email alert couldn’t be sent (see README: “Email alerts”).', true), 1200); }
+    }
+  }
 
   /* ---------------- shared: names, dates & times ---------------- */
   async function loadDirectory() {
@@ -930,7 +1032,8 @@
   const EVENT_KINDS = [['training', 'Training'], ['court', 'Court'], ['other', 'Other']];
   const kindLabel = (k) => (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1];
   function peoplePicker(list, selected = new Set()) {
-    return `<div class="people-picker">${list.filter((p) => p.active !== false).map((p) =>
+    return `<div class="picker-tools"><button type="button" class="btn small" data-pick="all">Select all</button><button type="button" class="btn small" data-pick="none">Clear</button><span class="hint picker-count"></span></div>
+    <div class="people-picker">${list.filter((p) => p.active !== false).map((p) =>
       `<label class="chip-check"><input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''}><span>${esc(p.full_name || 'Unnamed')}</span></label>`).join('')}</div>`;
   }
 
@@ -961,6 +1064,12 @@
       data.forEach((t) => (tags[t.event_id] ||= []).push(t.user_id));
     }
     const mine = (e) => (tags[e.id] || []).includes(me());
+    // Deputies only ever receive their own + "everyone" events (the database filters them).
+    // Managers see all, and can switch to just their own.
+    const justMine = isManager() && state.calMine;
+    const show = (e) => !justMine || mine(e) || e.for_everyone;
+    monthEv.data = monthEv.data.filter(show);
+    soonEv.data = soonEv.data.filter(show);
     const byDay = {};
     monthEv.data.forEach((e) => (byDay[isoDate(new Date(e.starts_at))] ||= []).push(e));
 
@@ -998,7 +1107,11 @@
             <button class="btn small" id="cal-today">Today</button>
           </div>
           <div class="cal-legend"><span class="ev-dot ev-training"></span>Training <span class="ev-dot ev-court"></span>Court <span class="ev-dot ev-other"></span>Other <span class="ev-dot ev-mine"></span>You're on it</div>
-          ${isManager() ? '<button class="btn small primary" id="ev-new">Add event</button>' : ''}
+          ${isManager() ? `<div class="cal-tools">
+            <div class="seg-toggle" role="group" aria-label="Whose events">
+              <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
+            </div>
+            <button class="btn small primary" id="ev-new">Add event</button></div>` : ''}
         </div>
         <div class="cal-grid">
           ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="cal-dow">${d}</div>`).join('')}
@@ -1015,11 +1128,12 @@
       </section>
 
       <section class="card">
-        <h2>Coming up (next 45 days)</h2>
+        <h2>${isManager() && !state.calMine ? 'Coming up (next 45 days)' : 'Coming up for you (next 45 days)'}</h2>
+        ${isManager() ? '' : '<p class="hint">Your calendar shows your court dates, trainings and other events you’re on, plus anything for the whole office.</p>'}
         ${soonEv.data.length ? `<ul class="agenda">${soonEv.data.map((e) => `<li class="${mine(e) ? 'is-mine' : ''}">
             <button class="agenda-item" data-ev="${e.id}">
               <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
-              <span class="agenda-title">${esc(e.title)}${mine(e) ? ' <span class="tag tag-mine">You</span>' : ''}</span>
+              <span class="agenda-title">${esc(e.title)}${mine(e) ? ' <span class="tag tag-mine">You</span>' : ''}${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}</span>
               <span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}${e.location ? ` · ${esc(e.location)}` : ''}</span>
             </button></li>`).join('')}</ul>` : '<p class="muted">Nothing scheduled.</p>'}
       </section>`;
@@ -1039,6 +1153,7 @@
     $('#cal-prev').onclick = () => { state.month = new Date(m.getFullYear(), m.getMonth() - 1, 1); showView('calendar'); };
     $('#cal-next').onclick = () => { state.month = new Date(m.getFullYear(), m.getMonth() + 1, 1); showView('calendar'); };
     $('#cal-today').onclick = () => { state.month = null; showView('calendar'); };
+    $$('[data-calmine]', el).forEach((b) => { b.onclick = () => { state.calMine = b.dataset.calmine === '1'; showView('calendar'); }; });
     if (isManager()) {
       $('#ann-new').onclick = () => editAnnouncement({ kind: 'general' });
       $('#ann-new-t').onclick = () => editAnnouncement({ kind: 'training' });
@@ -1061,7 +1176,7 @@
     const names = tagged.map(dirName).sort();
     openModal(`
       <div class="doc">
-        <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
+        <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}
         <h2 style="margin-top:.4rem">${esc(e.title)}</h2>
         <dl class="details">
           <dt>When</dt><dd>${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</dd>
@@ -1082,7 +1197,7 @@
       <form id="ev-form" autocomplete="off">
         <div class="row">
           <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. State v. Smith — Circuit Court"></label>
+          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court (use the case number, not names)"></label>
         </div>
         <label class="check"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
         <div class="row">
@@ -1093,8 +1208,11 @@
         </div>
         <label>Location<input name="location" value="${esc(e.location || '')}" placeholder="e.g. Cleburne County Courthouse, Courtroom B"></label>
         <label>Details<textarea name="details" rows="3">${esc(e.details || '')}</textarea></label>
+        <label class="check"><input type="checkbox" name="for_everyone" ${e.for_everyone ? 'checked' : ''}><span><strong>Show to everyone</strong> (office-wide training, meeting, holiday…)</span></label>
         <label>Deputies on this (court subpoena, required training…)</label>
         ${peoplePicker(people, new Set(tagged))}
+        <p class="hint" id="ev-vis"></p>
+        <label class="check"><input type="checkbox" name="email_people" checked><span>Email the deputies on this (when added, or if the time or place changes)</span></label>
         <div class="actions">
           <button class="btn primary" type="submit">${e.id ? 'Save' : 'Add to calendar'}</button>
           ${e.id ? '<button class="btn danger" type="button" id="ev-del">Delete</button>' : ''}
@@ -1103,12 +1221,26 @@
     const f = $('#ev-form');
     const syncAllDay = () => { $$('.time-f', f).forEach((l) => l.classList.toggle('hidden', f.all_day.checked)); };
     f.all_day.onchange = syncAllDay; syncAllDay();
+    $$('[data-pick]', f).forEach((b) => {
+      b.onclick = () => {
+        $$('.people-picker input', f).forEach((c) => { c.checked = b.dataset.pick === 'all'; });
+        syncVis();
+      };
+    });
+    const syncVis = () => {
+      const n = $$('.people-picker input:checked', f).length;
+      $('.picker-count', f).textContent = `${n} of ${$$('.people-picker input', f).length} selected`;
+      $('#ev-vis').textContent = f.for_everyone.checked ? 'Everyone will see this on their calendar.'
+        : n ? `Only the ${n === 1 ? 'deputy' : `${n} deputies`} checked (and managers) will see this.`
+        : 'Nobody is checked — only managers will see this. Check deputies or “Show to everyone”.';
+    };
+    f.addEventListener('change', syncVis); syncVis();
     f.onsubmit = (ev) => {
       ev.preventDefault();
       withBusy(f.querySelector('button[type=submit]'), async () => {
         const allDay = f.all_day.checked;
         const row = {
-          kind: f.kind.value, title: f.title.value.trim(), all_day: allDay,
+          kind: f.kind.value, title: f.title.value.trim(), all_day: allDay, for_everyone: f.for_everyone.checked,
           starts_at: fromLocalInput(f.sd.value, allDay ? '00:00' : f.st.value),
           ends_at: f.ed.value || (!allDay && f.et.value) ? fromLocalInput(f.ed.value || f.sd.value, allDay ? '23:59' : (f.et.value || f.st.value)) : null,
           location: f.location.value.trim() || null, details: f.details.value.trim() || null
@@ -1128,14 +1260,21 @@
         const add = [...want].filter((u) => !had.has(u)), del = [...had].filter((u) => !want.has(u));
         if (add.length) { const r = await sb.from('event_people').insert(add.map((user_id) => ({ event_id: id, user_id }))); if (r.error) throw r.error; }
         if (del.length) { const r = await sb.from('event_people').delete().eq('event_id', id).in('user_id', del); if (r.error) throw r.error; }
+        if (f.email_people.checked) {
+          if (add.length) notify('event_tagged', id, { user_ids: add });
+          const moved = e.id && (row.starts_at !== new Date(e.starts_at).toISOString() || (row.ends_at || null) !== (e.ends_at ? new Date(e.ends_at).toISOString() : null)
+            || row.all_day !== !!e.all_day || (row.location || null) !== (e.location || null));
+          if (moved && [...want].some((u) => had.has(u))) notify('event_changed', id, { exclude_ids: add });
+        }
         closeModal(); toast('Saved to calendar.');
         state.month = new Date(new Date(row.starts_at).getFullYear(), new Date(row.starts_at).getMonth(), 1);
         showView('calendar');
       });
     };
     if (e.id) $('#ev-del').onclick = (btn) => {
-      if (!confirm(`Delete “${e.title}” from the calendar?`)) return;
+      if (!confirm(`Delete “${e.title}” from the calendar?${tagged.length ? ' The deputies on it will be emailed that it was removed.' : ''}`)) return;
       withBusy(btn.target, async () => {
+        if (tagged.length) await notify('event_deleted', e.id);
         const r = await sb.from('events').delete().eq('id', e.id);
         if (r.error) throw r.error;
         closeModal(); toast('Deleted.'); showView('calendar');
@@ -1156,6 +1295,7 @@
           <label>Show until (optional)<input type="date" name="show_until" value="${esc(x.show_until || '')}"></label>
           <label class="check" style="align-self:center"><input type="checkbox" name="pinned" ${x.pinned ? 'checked' : ''}><span>Pin to the top</span></label>
         </div>
+        ${x.id ? '' : '<label class="check"><input type="checkbox" name="email_all"><span>Also email this to everyone</span></label>'}
         <p class="hint">For a training on a specific date, also add it to the calendar with <strong>Add event</strong> → Training.</p>
         <div class="actions">
           <button class="btn primary" type="submit">${x.id ? 'Save' : 'Post'}</button>
@@ -1170,8 +1310,9 @@
           show_until: f.show_until.value || null, pinned: f.pinned.checked };
         const r = x.id
           ? await sb.from('announcements').update({ ...row, updated_at: new Date().toISOString() }).eq('id', x.id)
-          : await sb.from('announcements').insert({ ...row, posted_by: me() });
+          : await sb.from('announcements').insert({ ...row, posted_by: me() }).select('id').single();
         if (r.error) throw r.error;
+        if (!x.id && f.email_all?.checked) notify('announcement', r.data.id);
         closeModal(); toast(x.id ? 'Saved.' : 'Posted.'); showView('calendar');
       });
     };
@@ -1255,9 +1396,10 @@
         withBusy(b, async () => {
           const existing = (reqs[b.dataset.req] || []).find((r) => r.user_id === me());
           const r = existing
-            ? await sb.from('offduty_requests').update({ status: 'requested', note: note.trim() || null }).eq('id', existing.id)
-            : await sb.from('offduty_requests').insert({ job_id: b.dataset.req, user_id: me(), note: note.trim() || null });
+            ? await sb.from('offduty_requests').update({ status: 'requested', note: note.trim() || null }).eq('id', existing.id).select('id').single()
+            : await sb.from('offduty_requests').insert({ job_id: b.dataset.req, user_id: me(), note: note.trim() || null }).select('id').single();
           if (r.error) throw r.error;
+          notify('offduty_request', r.data.id);
           toast('Request sent.'); showView('offduty');
         });
       };
@@ -1276,6 +1418,7 @@
       b.onclick = () => withBusy(b, async () => {
         const r = await sb.from('offduty_requests').update({ status: b.dataset.to }).eq('id', b.dataset.decide);
         if (r.error) throw r.error;
+        if (b.dataset.to === 'approved' || b.dataset.to === 'declined') notify('offduty_decision', b.dataset.decide);
         toast(b.dataset.to === 'approved' ? 'Approved.' : b.dataset.to === 'declined' ? 'Declined.' : 'Moved back to requests.');
         showView('offduty');
       });
@@ -1305,6 +1448,7 @@
           <label class="narrow-role">Spots<input type="number" name="spots" min="1" max="50" required value="${j.spots || 1}"></label>
         </div>
         <label>Details<textarea name="details" rows="3" placeholder="Uniform, contact person, parking…">${esc(j.details || '')}</textarea></label>
+        ${j.id ? '' : '<label class="check"><input type="checkbox" name="email_all" checked><span>Email everyone about this job</span></label>'}
         ${j.id ? `<label class="narrow-role">Status<select name="status">
           <option value="open" ${j.status === 'open' ? 'selected' : ''}>Open for requests</option>
           <option value="closed" ${j.status === 'closed' ? 'selected' : ''}>Closed (no new requests)</option>
@@ -1328,8 +1472,9 @@
         if (f.status) row.status = f.status.value;
         const r = j.id
           ? await sb.from('offduty_jobs').update({ ...row, updated_at: new Date().toISOString() }).eq('id', j.id)
-          : await sb.from('offduty_jobs').insert({ ...row, posted_by: me() });
+          : await sb.from('offduty_jobs').insert({ ...row, posted_by: me() }).select('id').single();
         if (r.error) throw r.error;
+        if (!j.id && f.email_all?.checked) notify('offduty_new_job', r.data.id);
         closeModal(); toast(j.id ? 'Saved.' : 'Job posted.'); showView('offduty');
       });
     };
@@ -1642,14 +1787,7 @@
           body: { email: f.email.value, full_name: f.full_name.value, role: f.role.value,
                   redirect_to: location.origin + location.pathname }
         });
-        if (error) {
-          let msg = error.message;
-          try { msg = (await error.context.json()).error || msg; } catch (_) { /* not JSON */ }
-          if (/not found|failed to send|fetch/i.test(msg) && !/email/i.test(msg)) {
-            msg = 'The invite function isn’t set up in Supabase yet (see README: “Inviting from the site”).';
-          }
-          throw new Error(msg);
-        }
+        if (error) throw new Error(await functionError(error, 'invite-user'));
         if (data?.error) throw new Error(data.error);
         toast(`Invite sent to ${f.email.value}.`);
         showView('team');
@@ -1715,7 +1853,7 @@
         };
         withBusy(b, async () => {
           if (!row.name) throw new Error('Give the duty a short name, like K9.');
-          if (!isHalfStep(row.default_hours)) throw new Error('Auto hours must be in half-hour steps (for example 0.5 or 4).');
+          if (!isHalfStep(row.default_hours)) throw new Error('Auto hours must be in quarter-hour steps (for example 0.25, 0.5 or 4).');
           if (!row.label) row.label = row.name + ' Hours';
           const res = tr.dataset.id
             ? await sb.from('duties').update(row).eq('id', tr.dataset.id)
@@ -1733,7 +1871,7 @@
       <td><input class="d-name" value="${esc(d.name)}" placeholder="${d.id ? '' : 'New, e.g. DEA'}"></td>
       <td><input class="d-label" value="${esc(d.label)}" placeholder="e.g. DEA Overtime Hours"></td>
       <td><input class="d-note" value="${esc(d.note)}" placeholder="Optional"></td>
-      <td><input class="d-default" type="number" min="0" step="0.5" value="${Number(d.default_hours) || ''}" placeholder="0"></td>
+      <td><input class="d-default" type="number" min="0" step="0.25" value="${Number(d.default_hours) || ''}" placeholder="0"></td>
       <td class="center"><input type="checkbox" class="d-everyone" ${d.everyone ? 'checked' : ''}></td>
       <td class="center"><input type="checkbox" class="d-active" ${d.active ? 'checked' : ''}></td>
       <td class="right"><button class="btn small ${d.id ? '' : 'primary'} d-save">${d.id ? 'Save' : 'Add'}</button></td>
