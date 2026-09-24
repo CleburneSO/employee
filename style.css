@@ -644,6 +644,46 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
   table.list td:has(.chip)::before { margin-right: auto; }
 }
 
+/* ---------------- patrol stats ---------------- */
+.stats-top { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: .75rem; }
+.stats-top h1 { margin: 0 0 .85rem; }
+.stats-top { align-items: center; }
+.stats-top h1 { margin: 0; }
+.stats-month { flex: 0 1 220px; margin: 0; }
+.stat-counters { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); gap: .6rem; margin-bottom: .5rem; }
+.stat-counter { display: flex; align-items: center; justify-content: space-between; gap: .75rem; border: 1px solid var(--line); border-radius: 8px; padding: .55rem .7rem; min-width: 0; }
+.stat-counter.auto { background: #f6f8f1; border-style: dashed; }
+.stat-counter-label { font-weight: 700; font-size: .92rem; min-width: 0; }
+.stat-counter-label small { display: block; font-weight: 400; color: var(--muted); font-size: .8rem; }
+.stepper { display: flex; align-items: center; gap: .3rem; flex: 0 0 auto; }
+.stepper input { width: 3.2em; margin: 0; text-align: center; font-weight: 700; padding-left: .2rem; padding-right: .2rem; -moz-appearance: textfield; }
+.stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.stepper .btn { width: 2.2rem; padding-left: 0; padding-right: 0; font-weight: 700; font-size: 1.05rem; }
+.stat-auto-value { font-weight: 700; font-size: 1.15rem; min-width: 3.2em; text-align: center; margin-right: 2.5rem; }
+.auto-tag { font-size: .66rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--primary); background: #e6ecd9; border-radius: 4px; padding: 1px 6px; }
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr)); gap: .6rem; }
+.stat-tile { border: 1px solid var(--line); border-top: 4px solid var(--primary); border-radius: 8px; padding: .6rem .75rem; min-width: 0; }
+.stat-tile.stat-felony_warrants, .stat-tile.stat-felony_arrests { border-top-color: #8f2d2d; }
+.stat-tile.stat-misd_warrants, .stat-tile.stat-misd_arrests { border-top-color: var(--gold); }
+.stat-tile.stat-civil_papers { border-top-color: #3e5f8a; }
+.stat-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.stat-value { font-size: 1.8rem; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.stat-diff { font-size: .8rem; color: var(--muted); }
+.stat-diff.up { color: var(--ok); }
+.stat-diff.down { color: var(--danger); }
+table.stats-table th { white-space: normal; vertical-align: bottom; line-height: 1.2; }
+table.stats-table td { white-space: nowrap; }
+table.stats-table td.right .btn + .btn { margin-left: .35rem; }
+table.list tr.is-me td { background: #fff6e5; font-weight: 600; }
+td.stat-set { min-width: 190px; }
+td.stat-set select { margin: .2rem 0; font-size: .85rem; padding: .3rem .4rem; }
+@media screen and (max-width: 760px) {
+  .stat-auto-value { margin-right: 2.6rem; }
+  table.list td.stat-set { flex-wrap: wrap; justify-content: flex-start; }
+  table.list td.stat-set::before { flex-basis: 100%; max-width: none; }
+  table.list td.stat-set select { max-width: none; flex: 1 1 140px; }
+}
+
 /* ---- print safety: phone rules never apply, nothing is clipped, one sheet per page ---- */
 @media print {
   html, body { overflow: visible !important; max-width: none !important; width: auto !important; }
