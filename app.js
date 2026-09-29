@@ -33,8 +33,8 @@
   let loadedUserId = null;
 
   const TIME_OFF_TYPES = [
-    ['vacation', 'Vacation'], ['sick', 'Sick'], ['personal', 'Personal'],
-    ['unpaid', 'Unpaid'], ['other', 'Other']
+    ['vacation', 'Vacation'], ['sick', 'Sick'], ['comp', 'Comp time used'], ['comp_earned', 'Comp time earned'],
+    ['personal', 'Personal'], ['unpaid', 'Unpaid'], ['other', 'Other']   // older requests only
   ];
 
   // Hour lines every employee has (matches the paper Deputies Daily Report)
@@ -893,35 +893,134 @@
   }
 
   /* ---------------- time off ---------------- */
-  views.timeoff = async (el) => {
-    const { data, error } = await sb.from('time_off_requests').select('*')
-      .eq('user_id', me()).order('start_date', { ascending: false });
+  // What people can ask for now (older requests may have other types; typeLabel still names them)
+  const REQUEST_TYPES = [['vacation', 'Vacation'], ['sick', 'Sick'], ['comp', 'Comp time (use)']];
+  const isComp = (t) => t === 'comp' || t === 'comp_earned';
+  const hoursText = (r) => r.hours == null
+    ? `${dayCount(r.start_date, r.end_date)} day${dayCount(r.start_date, r.end_date) > 1 ? 's' : ''}`
+    : `${r.type === 'comp_earned' ? '+' : r.type === 'comp' ? '−' : ''}${hrs(r.hours)} hrs`;
+  async function compBalances() {
+    const { data, error } = await sb.rpc('comp_balances');
     if (error) throw error;
+    return data || [];
+  }
+
+  views.timeoff = async (el) => {
+    const [reqs, bals, adj] = await Promise.all([
+      sb.from('time_off_requests').select('*').eq('user_id', me()).order('start_date', { ascending: false }),
+      compBalances(),
+      sb.from('comp_adjustments').select('*').eq('user_id', me()).order('created_at', { ascending: false })
+    ]);
+    if (reqs.error) throw reqs.error;
+    if (adj.error) throw adj.error;
+    const data = reqs.data;
+    const b = bals.find((x) => x.user_id === me()) || { balance: 0, pending_earned: 0, pending_used: 0 };
+    const balance = Number(b.balance) || 0, pEarn = Number(b.pending_earned) || 0, pUse = Number(b.pending_used) || 0;
+    const available = balance - pUse;
+
+    // Comp history: approved comp requests and manager adjustments, newest first, with a running balance
+    const ledger = [
+      ...data.filter((r) => isComp(r.type) && r.status === 'approved' && r.hours != null).map((r) => ({
+        when: r.reviewed_at || r.created_at, date: r.start_date,
+        what: r.type === 'comp_earned' ? `Earned${r.reason ? ': ' + r.reason : ''}` : `Used${r.start_date !== r.end_date ? ' (' + dateRange(r.start_date, r.end_date) + ')' : ''}`,
+        hours: r.type === 'comp_earned' ? Number(r.hours) : -Number(r.hours) })),
+      ...adj.data.map((a) => ({ when: a.created_at, date: isoDate(new Date(a.created_at)), what: `Adjustment: ${a.note}`, hours: Number(a.hours) }))
+    ].sort((x, y) => String(x.when).localeCompare(String(y.when)));
+    let run = 0;
+    ledger.forEach((l) => { run += l.hours; l.after = run; });
+    ledger.reverse();
 
     el.innerHTML = `
+      <section class="card comp-card">
+        <div class="comp-head">
+          <div>
+            <h2>Comp time</h2>
+            <div class="comp-balance"><span class="comp-num">${hrs(balance)}</span> hrs available</div>
+            <div class="hint" style="margin:0">${pEarn || pUse
+              ? `Waiting for approval: ${pEarn ? `+${hrs(pEarn)} earned` : ''}${pEarn && pUse ? ', ' : ''}${pUse ? `−${hrs(pUse)} used` : ''}. Your balance changes once a manager approves.`
+              : 'Your balance changes when a manager approves comp time earned or used.'}</div>
+          </div>
+        </div>
+        <details class="fold" id="comp-earn-fold">
+          <summary><h3>Log comp time earned</h3></summary>
+          <form id="ce-form" class="row end" autocomplete="off">
+            <label>Day worked<input type="date" name="date" max="${esc(localToday())}" required></label>
+            <label class="narrow">Hours<input type="number" name="hours" min="0.25" step="0.25" inputmode="decimal" required placeholder="e.g. 2.5"></label>
+            <label class="grow">What for<input name="reason" required placeholder="e.g. Court after shift, held over on a call"></label>
+            <button class="btn primary" type="submit">Submit</button>
+          </form>
+        </details>
+        ${ledger.length ? `<details class="fold">
+          <summary><h3>Comp history</h3></summary>
+          <div class="table-wrap"><table class="list">
+            <thead><tr><th>Date</th><th>What</th><th class="num">Hours</th><th class="num">Balance</th></tr></thead>
+            <tbody>${ledger.map((l) => `<tr><td>${esc(fmtShort(l.date))}</td><td>${esc(l.what)}</td>
+              <td class="num">${l.hours > 0 ? '+' : '−'}${hrs(Math.abs(l.hours))}</td><td class="num">${hrs(l.after)}</td></tr>`).join('')}</tbody>
+          </table></div>
+        </details>` : ''}
+      </section>
+
       <section class="card">
         <h2>Request time off</h2>
-        <form id="to-form">
+        <form id="to-form" autocomplete="off">
           <div class="row">
-            <label>Type<select name="type">${TIME_OFF_TYPES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+            <label>Type<select name="type">${REQUEST_TYPES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
             <label>First day<input type="date" name="start" required></label>
             <label>Last day<input type="date" name="end" required></label>
+            <label class="narrow">Total hours<input type="number" name="hours" min="0.25" step="0.25" inputmode="decimal" required placeholder="e.g. 12"></label>
           </div>
+          <p class="hint" id="to-hint" style="margin-top:-.4rem">Total hours for the whole request — for example 12 for one shift, 24 for two.</p>
           <label>Reason (optional)<textarea name="reason" rows="2"></textarea></label>
           <button class="btn primary" type="submit">Submit request</button>
         </form>
       </section>
       <section class="card"><h2>My requests</h2>${timeOffTable(data, false)}</section>`;
 
+    // Log comp earned
+    const ce = $('#ce-form');
+    ce.onsubmit = (e) => {
+      e.preventDefault();
+      const hours = Number(ce.hours.value);
+      withBusy(ce.querySelector('button'), async () => {
+        if (!(hours > 0) || !isHalfStep(hours)) throw new Error('Hours must be in quarter-hour steps (for example 1, 1.25 or 2.5).');
+        const { error } = await sb.from('time_off_requests').insert({
+          user_id: me(), type: 'comp_earned', start_date: ce.date.value, end_date: ce.date.value,
+          hours, reason: ce.reason.value.trim()
+        });
+        if (error) throw error;
+        toast('Comp time submitted for approval.');
+        showView('timeoff');
+      });
+    };
+
+    // Request time off
     const form = $('#to-form');
+    const hint = $('#to-hint');
+    const baseHint = hint.textContent;
+    const updateHint = () => {
+      hint.classList.remove('error-text');
+      if (form.type.value !== 'comp') { hint.textContent = baseHint; return; }
+      const want = Number(form.hours.value) || 0;
+      hint.textContent = `You have ${hrs(available)} comp hours you can use${pUse ? ` (${hrs(balance)} minus ${hrs(pUse)} already requested)` : ''}.`;
+      if (want > available) {
+        hint.textContent += ` This request is ${hrs(want - available)} more than that.`;
+        hint.classList.add('error-text');
+      }
+    };
+    form.type.onchange = updateHint;
+    form.hours.oninput = updateHint;
     form.start.onchange = () => { if (!form.end.value || form.end.value < form.start.value) form.end.value = form.start.value; };
     form.onsubmit = (e) => {
       e.preventDefault();
+      const hours = Number(form.hours.value);
+      if (form.type.value === 'comp' && hours > available
+          && !confirm(`You only have ${hrs(available)} comp hours available. Send the request for ${hrs(hours)} hours anyway?`)) return;
       withBusy(form.querySelector('button[type=submit]'), async () => {
         if (form.end.value < form.start.value) throw new Error('Last day must be on or after the first day.');
+        if (!(hours > 0) || !isHalfStep(hours)) throw new Error('Hours must be in quarter-hour steps (for example 4, 4.25 or 12).');
         const { error } = await sb.from('time_off_requests').insert({
           user_id: me(), type: form.type.value, start_date: form.start.value,
-          end_date: form.end.value, reason: form.reason.value.trim() || null
+          end_date: form.end.value, hours, reason: form.reason.value.trim() || null
         });
         if (error) throw error;
         toast('Request submitted.');
@@ -934,18 +1033,19 @@
   function timeOffTable(list, mgr) {
     if (!list.length) return '<p class="muted">Nothing here yet.</p>';
     return `<div class="table-wrap"><table class="list">
-      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Dates</th><th class="num">Days</th><th>Type</th><th>Status</th><th>Note</th><th></th></tr></thead>
+      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Dates</th><th class="num">Hours</th><th>Type</th><th>Status</th><th>Note</th><th></th></tr></thead>
       <tbody>${list.map((r) => {
         let action = '';
         if (mgr && r.status === 'pending') action = `<button class="btn small" data-to="${r.id}">Review</button>`;
-        else if (!mgr && r.status === 'pending') action = `<button class="btn small" data-cancel="${r.id}">Cancel</button>`;
-        return `<tr>
+        else if (mgr) action = `<button class="btn small" data-to="${r.id}">View</button>`;
+        else if (r.status === 'pending') action = `<button class="btn small" data-cancel="${r.id}">Cancel</button>`;
+        return `<tr class="${r.type === 'comp_earned' ? 'is-earned' : ''}">
           ${mgr ? `<td>${esc(personName(r.user_id, 'Unknown'))}</td>` : ''}
-          <td>${esc(dateRange(r.start_date, r.end_date))}</td>
-          <td class="num">${dayCount(r.start_date, r.end_date)}</td>
+          <td>${esc(r.type === 'comp_earned' ? fmtDate(r.start_date) : dateRange(r.start_date, r.end_date))}</td>
+          <td class="num">${esc(hoursText(r))}</td>
           <td>${esc(typeLabel(r.type))}</td>
           <td>${badge(r.status)}</td>
-          <td class="note">${esc(r.manager_note || (mgr ? r.reason : '') || '')}</td>
+          <td class="note">${esc(r.manager_note || (mgr || r.type === 'comp_earned' ? r.reason : '') || '')}</td>
           <td class="right">${action}</td></tr>`;
       }).join('')}</tbody></table></div>`;
   }
@@ -970,18 +1070,31 @@
   function openTimeOff(r) {
     openModal(`
       <div class="doc">
-        <h2>Time-off request</h2>
+        <h2>${r.type === 'comp_earned' ? 'Comp time earned' : 'Time-off request'}</h2>
         <p><strong>${esc(personName(r.user_id, 'Employee'))}</strong> ${badge(r.status)}</p>
         <dl class="details">
           <dt>Type</dt><dd>${esc(typeLabel(r.type))}</dd>
-          <dt>Dates</dt><dd>${esc(dateRange(r.start_date, r.end_date))} (${dayCount(r.start_date, r.end_date)} day${dayCount(r.start_date, r.end_date) > 1 ? 's' : ''})</dd>
-          <dt>Reason</dt><dd>${esc(r.reason || '—')}</dd>
+          <dt>${r.type === 'comp_earned' ? 'Day worked' : 'Dates'}</dt><dd>${esc(r.type === 'comp_earned' ? fmtDate(r.start_date) : dateRange(r.start_date, r.end_date))}${r.type === 'comp_earned' ? '' : ` (${dayCount(r.start_date, r.end_date)} day${dayCount(r.start_date, r.end_date) > 1 ? 's' : ''})`}</dd>
+          <dt>Hours</dt><dd>${r.hours == null ? '—' : esc(hrs(r.hours))}</dd>
+          <dt>${r.type === 'comp_earned' ? 'What for' : 'Reason'}</dt><dd>${esc(r.reason || '—')}</dd>
+          ${isComp(r.type) ? '<dt>Comp balance</dt><dd id="to-bal">…</dd>' : ''}
           <dt>Requested</dt><dd>${esc(fmtDateTime(r.created_at))}</dd>
         </dl>
         ${reviewInfo(r)}
       </div>
       ${isManager() && r.status === 'pending' ? reviewControls('Deny') : ''}`);
     if (isManager() && r.status === 'pending') bindReview('time_off_requests', r.id, 'denied');
+    if (isComp(r.type) && r.hours != null) {
+      compBalances().then((list) => {
+        const b = list.find((x) => x.user_id === r.user_id);
+        const cell = $('#to-bal');
+        if (!b || !cell) return;
+        const bal = Number(b.balance) || 0, h = Number(r.hours) || 0;
+        const after = r.type === 'comp_earned' ? bal + h : bal - h;
+        cell.innerHTML = `${esc(hrs(bal))} hrs now${r.status === 'pending'
+          ? ` → <strong${after < 0 ? ' class="error-text"' : ''}>${esc(hrs(after))} hrs</strong> if approved` : ''}`;
+      }).catch(() => { const cell = $('#to-bal'); if (cell) cell.textContent = '?'; });
+    }
   }
 
   /* ---------------- manager: approvals ---------------- */
@@ -992,13 +1105,15 @@
     // When a person is picked, show only them and their full history
     const q = (table) => { let x = sb.from(table).select('*'); if (who) x = x.eq('user_id', who); return x; };
     const recent = (x) => who ? x : x.limit(25);
-    const [ts, to, tsDone, toDone] = await Promise.all([
+    const [ts, to, tsDone, toDone, bals] = await Promise.all([
       q('timesheets').eq('status', 'submitted').order('period_start'),
       q('time_off_requests').eq('status', 'pending').order('start_date'),
       recent(q('timesheets').neq('status', 'submitted').order('period_start', { ascending: false })),
-      recent(q('time_off_requests').neq('status', 'pending').order('start_date', { ascending: false }))
+      recent(q('time_off_requests').neq('status', 'pending').order('start_date', { ascending: false })),
+      compBalances()
     ]);
     for (const r of [ts, to, tsDone, toDone]) if (r.error) throw r.error;
+    const compRows = bals.filter((b) => (who ? b.user_id === who : b.active !== false));
     const forWho = who ? ` — ${esc(personName(who))}` : '';
 
     el.innerHTML = `
@@ -1016,6 +1131,21 @@
         <div id="ts-pending">${timesheetTable(ts.data, true)}</div></section>
       <section class="card"><h2>Time off awaiting approval${forWho} <span class="count">${to.data.length}</span></h2>
         <div id="to-pending">${timeOffTable(to.data, true)}</div></section>
+      <section class="card">
+        <details class="fold" ${who ? 'open' : ''}>
+          <summary><h2>Comp time balances${forWho}</h2></summary>
+          <p class="muted">Balance = approved comp earned − approved comp used + adjustments. Use <strong>Adjust</strong> to enter someone’s starting balance or fix a mistake.</p>
+          <div class="table-wrap"><table class="list">
+            <thead><tr><th>Name</th><th class="num">Balance</th><th class="num">Pending earned</th><th class="num">Pending used</th><th></th></tr></thead>
+            <tbody>${compRows.map((b) => `<tr data-id="${b.user_id}"><td>${esc(b.full_name || personName(b.user_id))}</td>
+              <td class="num"><strong>${hrs(b.balance)}</strong></td>
+              <td class="num">${Number(b.pending_earned) ? '+' + hrs(b.pending_earned) : '—'}</td>
+              <td class="num">${Number(b.pending_used) ? '−' + hrs(b.pending_used) : '—'}</td>
+              <td class="right"><button class="btn small comp-adj">Adjust</button></td></tr>`).join('')}</tbody>
+          </table></div>
+          <button class="btn small" id="comp-csv" type="button">Download CSV</button>
+        </details>
+      </section>
       <section class="card"><h2>Payroll: print or export a pay period${forWho}</h2>
         <form id="exp" class="row end">
           <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
@@ -1036,6 +1166,42 @@
     bindTimesheetButtons($('#ts-done'), tsDone.data);
     bindTimeOffButtons($('#to-pending'), to.data);
     bindTimeOffButtons($('#to-done'), toDone.data);
+
+    $('#comp-csv').onclick = () => downloadCSV(`comp-balances-${localToday()}.csv`, [
+      ['Name', 'Balance', 'Earned (approved)', 'Used (approved)', 'Adjustments', 'Pending earned', 'Pending used'],
+      ...compRows.map((b) => [b.full_name, Number(b.balance), Number(b.earned), Number(b.used), Number(b.adjusted), Number(b.pending_earned), Number(b.pending_used)])
+    ]);
+    $$('.comp-adj', el).forEach((btn) => {
+      btn.onclick = () => {
+        const b = compRows.find((x) => x.user_id === btn.closest('tr').dataset.id);
+        openModal(`
+          <h2 class="modal-head">Adjust comp time — ${esc(b.full_name)}</h2>
+          <p>Current balance: <strong>${esc(hrs(b.balance))} hrs</strong></p>
+          <form id="adj-form" autocomplete="off">
+            <div class="row">
+              <label class="narrow">Hours<input type="number" name="hours" step="0.25" inputmode="decimal" required placeholder="e.g. 24 or -4"></label>
+              <label class="grow">Note<input name="note" required placeholder="e.g. Starting balance from paper records"></label>
+            </div>
+            <p class="hint" id="adj-hint">Positive adds hours, negative takes them away. Adjustments can’t be edited or deleted — fix a mistake with another adjustment.</p>
+            <div class="actions"><button class="btn primary" type="submit">Save adjustment</button><button class="btn" type="button" id="adj-cancel">Cancel</button></div>
+          </form>`);
+        const f = $('#adj-form');
+        f.hours.oninput = () => { const h = Number(f.hours.value) || 0; $('#adj-hint').textContent = h ? `New balance will be ${hrs(Number(b.balance) + h)} hrs.` : 'Positive adds hours, negative takes them away.'; };
+        $('#adj-cancel').onclick = closeModal;
+        f.onsubmit = (e) => {
+          e.preventDefault();
+          const hours = Number(f.hours.value);
+          withBusy(f.querySelector('[type=submit]'), async () => {
+            if (!hours || !isHalfStep(Math.abs(hours))) throw new Error('Hours must be in quarter-hour steps and not 0 (for example 24, 2.5 or -4).');
+            const { error } = await sb.from('comp_adjustments').insert({ user_id: b.user_id, hours, note: f.note.value.trim() });
+            if (error) throw error;
+            closeModal();
+            toast('Comp balance adjusted.');
+            showView('review');
+          });
+        };
+      };
+    });
 
     async function fetchPeriod() {
       const p = $('#exp-period').value;
@@ -1299,7 +1465,7 @@
       <form id="ev-form" autocomplete="off">
         <div class="row">
           <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. Court, Meeting, etc."></label>
+          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court"></label>
         </div>
         <label class="check not-holiday"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
         <div class="holiday-only notice"><label style="margin:0">Paid holiday hours<input type="number" name="holiday_hours" min="0" max="24" step="0.25" value="${e.holiday_hours ?? 8}" style="max-width:110px"></label>
@@ -2079,7 +2245,8 @@
     ['timesheets', 'Timesheet'], ['time_off_requests', 'Time off'], ['case_numbers', 'Case number'],
     ['case_counters', 'Case number setting'], ['offduty_jobs', 'Off-duty job'], ['offduty_requests', 'Off-duty request'],
     ['events', 'Calendar event'], ['event_people', 'Calendar tag'], ['announcements', 'Announcement'],
-    ['profiles', 'Person'], ['duties', 'Special duty'], ['profile_duties', 'Duty assignment'], ['patrol_stats', 'Patrol stats']
+    ['profiles', 'Person'], ['duties', 'Special duty'], ['profile_duties', 'Duty assignment'], ['patrol_stats', 'Patrol stats'],
+    ['comp_adjustments', 'Comp adjustment']
   ];
   const AUDIT_PER_PAGE = 50;
   const areaLabel = (t) => (AUDIT_AREAS.find(([k]) => k === t) || [t, t])[1];
@@ -2093,7 +2260,7 @@
     start_date: 'First day', end_date: 'Last day', reason: 'Reason', note: 'Note', signature: 'Signature',
     shift_date: 'Shift date', shift: 'Shift', felony_warrants: 'Felony warrants', misd_warrants: 'Misd./traffic warrants',
     civil_papers: 'Civil papers', felony_arrests: 'On-view arrests (felony)', misd_arrests: 'On-view arrests (misd.)',
-    patrol: 'Patrol', is_supervisor: 'Supervisor', reports_to: 'Reports to', user_id: 'Person'
+    patrol: 'Patrol', is_supervisor: 'Supervisor', reports_to: 'Reports to', user_id: 'Person', hours: 'Hours', type: 'Type'
   };
   const HIDDEN_FIELDS = ['id', 'created_at', 'reviewed_by', 'reviewed_at', 'decided_by', 'decided_at', 'voided_by', 'voided_at',
     'signed_at', 'reserved_at', 'year', 'seq', 'sort', 'posted_by', 'created_by', 'k9_hours', 'traffic_ot_hours', 'notes'];
@@ -2237,7 +2404,7 @@
         <details class="fold">
           <summary><h2>Invite someone</h2></summary>
           <form id="invite-form" class="row end" autocomplete="off">
-            <label>Full name<input name="full_name" required placeholder="e.g. John Smith"></label>
+            <label>Full name<input name="full_name" required placeholder="e.g. Caleb Hill"></label>
             <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
             <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
             <button class="btn primary" type="submit">Send invite</button>
