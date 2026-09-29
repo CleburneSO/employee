@@ -743,6 +743,17 @@ table.extras input { padding-top: .32rem; padding-bottom: .32rem; margin-top: 0;
   .sig-box canvas { height: 130px; }
 }
 
+/* ---------------- comp time ---------------- */
+.comp-card .comp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.comp-card h2 { margin-bottom: .3rem; }
+.comp-balance { font-size: .95rem; color: var(--muted); margin-bottom: .2rem; }
+.comp-num { font-size: 2rem; font-weight: 800; color: var(--primary); font-variant-numeric: tabular-nums; margin-right: .2rem; }
+.comp-card details.fold { border-top: 1px solid var(--line); padding-top: .6rem; margin-top: .6rem; }
+details.fold > summary h3 { margin: 0; font-size: 1rem; }
+.row > label.grow { flex: 2 1 260px; }
+table.list tr.is-earned td { background: #f3f8ec; }
+table.list td.num { white-space: nowrap; }
+
 /* ---- print safety: phone rules never apply, nothing is clipped, one sheet per page ---- */
 @media print {
   html, body { overflow: visible !important; max-width: none !important; width: auto !important; }
