@@ -17,7 +17,7 @@
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
   const PERIOD_ANCHOR = cfg.PAY_PERIOD_START || '2025-06-12';
-  const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-10-01';   // the portal's first pay period; nothing earlier is offered
+  const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-09-17';   // the portal's first pay period; nothing earlier is offered
   const LOGO = cfg.LOGO === undefined ? 'logo.png' : cfg.LOGO;   // '' = no logo
   // Logo image; hides itself if the file isn't there
   const logoImg = (cls) => LOGO
