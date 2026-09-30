@@ -16,7 +16,7 @@
   const ORG = cfg.COMPANY_NAME || 'Employee Portal';
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
-  // The portal's first pay period. Every pay period is counted in 14-day steps from this date,
+  // The portal's first pay period. Every pay period is counted in 14 day steps from this date,
   // and nothing earlier is offered. (PAY_PERIOD_START in config.js is no longer used.)
   const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-09-17';
   const PERIOD_ANCHOR = FIRST_PERIOD;
