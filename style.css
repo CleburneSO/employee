@@ -756,6 +756,16 @@ table.list td.num { white-space: nowrap; }
 table.extras tr.duty-row.unpaid th, table.extras tr.duty-row.unpaid td { background: #eef3f8; }
 table.extras tr.duty-row.unpaid.has-hours th, table.extras tr.duty-row.unpaid.has-hours td { background: #dde8f3; }
 
+/* ---------------- usual hours ---------------- */
+.usual-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; margin: 0 0 .8rem; padding: .5rem .7rem; background: #f6f8f1; border: 1px solid #dfe6d2; border-radius: 8px; }
+.usual-label { font-weight: 700; font-size: .88rem; }
+.usual-bar .hint { margin: 0; flex: 1 1 260px; }
+.usual-picker { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.usual-picker select { width: auto; margin: 0; padding: .35rem .5rem; }
+.usual-custom { display: inline-flex; align-items: center; gap: .35rem; }
+.usual-custom[hidden] { display: none; }
+fieldset.person-set .usual-picker { margin-bottom: .3rem; }
+
 /* ---- print safety: phone rules never apply, nothing is clipped, one sheet per page ---- */
 @media print {
   html, body { overflow: visible !important; max-width: none !important; width: auto !important; }
