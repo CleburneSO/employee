@@ -485,7 +485,7 @@
   const isHalfHourTime = (v) => /^([01]\d|2[0-3]):(00|15|30|45)$/.test(v);
   const isHalfStep = (n) => Math.abs(n * 4 - Math.round(n * 4)) < 1e-9;   // quarter hours
   // Usual hours: the person's normal shift, offered at the top of the Time in / Time out lists
-  const USUAL_PRESETS = [['07:00', '19:00'], ['19:00', '07:00'], ['13:00', '01:00'], ['08:00', '16:00'], ['08:00', '18:00'], ['19:00', '05:00']];
+  const USUAL_PRESETS = [['07:00', '19:00'], ['19:00', '07:00'], ['13:00', '01:00'], ['08:00', '16:00'], ['08:00', '18:00'], ['07:00', '17:00']];
   const shiftText = (i, o) => `${clock(i)}–${clock(o)}`;
   const hasUsual = () => !!(state.profile?.usual_in && state.profile?.usual_out);
   function usualOption(cls) {
@@ -1547,7 +1547,7 @@
       <form id="ev-form" autocomplete="off">
         <div class="row">
           <label class="narrow-role">Type<select name="kind">${EVENT_KINDS.map(([k, l]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. 202609230951 — Circuit Court"></label>
+          <label>Title<input name="title" required value="${esc(e.title || '')}" placeholder="e.g. Circuit/District Court, Firearms qualification, etc."></label>
         </div>
         <label class="check not-holiday"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
         <div class="holiday-only notice"><label style="margin:0">Paid holiday hours<input type="number" name="holiday_hours" min="0" max="24" step="0.25" value="${e.holiday_hours ?? 8}" style="max-width:110px"></label>
@@ -2486,7 +2486,7 @@
         <details class="fold">
           <summary><h2>Invite someone</h2></summary>
           <form id="invite-form" class="row end" autocomplete="off">
-            <label>Full name<input name="full_name" required placeholder="e.g. Caleb Hill"></label>
+            <label>Full name<input name="full_name" required placeholder="e.g. John Doe"></label>
             <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
             <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
             <button class="btn primary" type="submit">Send invite</button>
