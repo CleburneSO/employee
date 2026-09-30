@@ -16,7 +16,7 @@
   const ORG = cfg.COMPANY_NAME || 'Employee Portal';
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
-  // The portal's first pay period. Every pay period is counted in 14 day steps from this date,
+  // The portal's first pay period. Every pay period is counted in 14-day steps from this date,
   // and nothing earlier is offered. (PAY_PERIOD_START in config.js is no longer used.)
   const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-09-17';
   const PERIOD_ANCHOR = FIRST_PERIOD;
@@ -312,7 +312,7 @@
   }
 
   async function loadPeople() {
-    const { data, error } = await sb.from('profiles').select('id, full_name, email, role, active, deactivated_at, patrol, shift, is_supervisor, reports_to').order('full_name');
+    const { data, error } = await sb.from('profiles').select('id, full_name, email, role, active, deactivated_at, patrol, shift, is_supervisor, reports_to, usual_in, usual_out').order('full_name');
     if (error) throw error;
     state.people = Object.fromEntries(data.map((p) => [p.id, p]));
     return data;
@@ -484,10 +484,50 @@
   });
   const isHalfHourTime = (v) => /^([01]\d|2[0-3]):(00|15|30|45)$/.test(v);
   const isHalfStep = (n) => Math.abs(n * 4 - Math.round(n * 4)) < 1e-9;   // quarter hours
-  function timeSelect(cls, value, label) {
+  // Usual hours: the person's normal shift, offered at the top of the Time in / Time out lists
+  const USUAL_PRESETS = [['07:00', '19:00'], ['19:00', '07:00'], ['13:00', '01:00'], ['08:00', '16:00'], ['08:00', '18:00'], ['19:00', '05:00']];
+  const shiftText = (i, o) => `${clock(i)}–${clock(o)}`;
+  const hasUsual = () => !!(state.profile?.usual_in && state.profile?.usual_out);
+  function usualOption(cls) {
+    if (!hasUsual()) return '';
+    const p = state.profile;
+    return cls === 't-in'
+      ? `<option value="usual">★ ${esc(shiftText(p.usual_in, p.usual_out))} (usual)</option>`
+      : `<option value="usual">★ ${esc(clock(p.usual_out))} (usual)</option>`;
+  }
+  function timeSelect(cls, value, label, usual = false) {
     const extra = value && !isHalfHourTime(value) ? `<option value="${esc(value)}" selected>${esc(value)} (fix)</option>` : '';
-    return `<select class="${cls}" aria-label="${label}"><option value=""></option>${extra}${HALF_HOURS.map(([v, l]) =>
+    return `<select class="${cls}" aria-label="${label}"><option value=""></option>${usual ? usualOption(cls) : ''}${extra}${HALF_HOURS.map(([v, l]) =>
       `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  }
+  // A preset list (plus Custom…) for choosing someone's usual hours
+  function usualPicker(inV, outV) {
+    const cur = inV && outV ? `${inV}-${outV}` : '';
+    const isPreset = USUAL_PRESETS.some(([a, b]) => `${a}-${b}` === cur);
+    return `<span class="usual-picker">
+      <select class="usual-preset" aria-label="Usual hours">
+        <option value="">None</option>
+        ${USUAL_PRESETS.map(([a, b]) => `<option value="${a}-${b}" ${cur === `${a}-${b}` ? 'selected' : ''}>${esc(shiftText(a, b))}</option>`).join('')}
+        <option value="custom" ${cur && !isPreset ? 'selected' : ''}>${cur && !isPreset ? esc(shiftText(inV, outV)) + ' (custom)' : 'Custom…'}</option>
+      </select>
+      <span class="usual-custom" ${cur && !isPreset ? '' : 'hidden'}>
+        ${timeSelect('u-in', cur && !isPreset ? inV : '', 'Usual time in')}<span>to</span>${timeSelect('u-out', cur && !isPreset ? outV : '', 'Usual time out')}
+      </span>
+    </span>`;
+  }
+  function bindUsualPicker(root, onChange) {
+    const sel = $('.usual-preset', root), custom = $('.usual-custom', root);
+    sel.addEventListener('change', () => { custom.hidden = sel.value !== 'custom'; if (sel.value !== 'custom') onChange?.(); });
+    $$('.usual-custom select', root).forEach((x) => x.addEventListener('change', () => onChange?.()));
+  }
+  function readUsualPicker(root) {
+    const v = $('.usual-preset', root).value;
+    if (!v) return { usual_in: null, usual_out: null };
+    if (v !== 'custom') { const [a, b] = v.split('-'); return { usual_in: a, usual_out: b }; }
+    const a = $('.u-in', root).value, b = $('.u-out', root).value;
+    if (!a || !b) return null;   // custom, not finished yet
+    if (a === b) throw new Error('Usual time in and time out can’t be the same.');
+    return { usual_in: a, usual_out: b };
   }
 
   // One row per block of time. A day can have several blocks (e.g. regular shift + Traffic OT).
@@ -505,8 +545,8 @@
       <td class="day">${first
         ? `<span class="d-date"><span class="d-wd">${esc(fmtDay(iso))}</span> <strong>${esc(monthDay(iso))}</strong></span><button type="button" class="add-seg" title="Add another block of time on this day" aria-label="Add time on ${esc(fmtShort(iso))}">+</button>`
         : `<span class="seg-more">↳ more</span><button type="button" class="del-seg" title="Remove this block of time" aria-label="Remove this time">✕</button>`}</td>
-      <td>${timeSelect('t-in', e.in || '', 'Time in')}</td>
-      <td>${timeSelect('t-out', e.out || '', 'Time out')}</td>
+      <td>${timeSelect('t-in', e.in || '', 'Time in', true)}</td>
+      <td>${timeSelect('t-out', e.out || '', 'Time out', true)}</td>
       <td class="num t-hours"></td>
       <td><div class="expl-wrap">${typeSelect(e.duty_id || '')}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (OT, absence…)" aria-label="Explanation"></div></td>
     </tr>`;
@@ -589,6 +629,8 @@
           <div class="row">
             <label>Pay period${periodSelect('ts-period', currentPeriod(), mine.map((t) => t.period_start))}</label>
           </div>
+          <div class="usual-bar" id="ts-usual"><span class="usual-label">My usual hours</span>${usualPicker(state.profile.usual_in, state.profile.usual_out)}
+            <span class="hint" id="ts-usual-hint">${hasUsual() ? 'Pick <strong>★</strong> at the top of a day’s Time in list to fill in your usual shift.' : 'Set these and your shift shows at the top of each day’s Time in list.'}</span></div>
           <div id="ts-status" class="notice hidden"></div>
           <div id="ts-holiday" class="notice holiday-note hidden"></div>
           <div class="table-wrap"><table class="grid entry">
@@ -642,7 +684,36 @@
     });
     const pad = createSignaturePad($('#sig'));
     $('#sig-clear').onclick = () => pad.clear();
-    $('#ts-form').addEventListener('input', (e) => { if (!e.target.closest('.sign')) recalc(); });
+    // ★ usual: fill in the person's usual shift (both times from Time in; just the end from Time out)
+    const applyUsual = (e) => {
+      const sel = e.target;
+      if (sel.value !== 'usual' || !hasUsual()) return;
+      const tr = sel.closest('tr');
+      if (sel.classList.contains('t-in')) {
+        $('.t-in', tr).value = state.profile.usual_in;
+        $('.t-out', tr).value = state.profile.usual_out;
+      } else {
+        sel.value = state.profile.usual_out;
+      }
+    };
+    $('#ts-rows').addEventListener('input', applyUsual);
+    $('#ts-rows').addEventListener('change', applyUsual);
+    $('#ts-form').addEventListener('input', (e) => { if (!e.target.closest('.sign') && !e.target.closest('#ts-usual')) recalc(); });
+    bindUsualPicker($('#ts-usual'), async () => {
+      try {
+        const u = readUsualPicker($('#ts-usual'));
+        if (!u) return;
+        const { error } = await sb.from('profiles').update(u).eq('id', me());
+        if (error) throw error;
+        Object.assign(state.profile, u);
+        // refresh the ★ choice at the top of every time list
+        $$('#ts-rows select.t-in, #ts-rows select.t-out').forEach((x) => {
+          $('option[value="usual"]', x)?.remove();
+          if (hasUsual()) x.options[0].insertAdjacentHTML('afterend', usualOption(x.classList.contains('t-in') ? 't-in' : 't-out'));
+        });
+        $('#ts-usual-hint').innerHTML = hasUsual() ? 'Saved. Pick <strong>★</strong> at the top of a day’s Time in list to fill in your usual shift.' : 'Usual hours cleared.';
+      } catch (err) { toast(err.message || String(err), true); }
+    });
     $('#ts-rows').addEventListener('click', (e) => {
       const add = e.target.closest('.add-seg'), del = e.target.closest('.del-seg');
       if (add) {
@@ -2521,6 +2592,12 @@
           </div>
           <p class="muted" style="margin-top:-.4rem">${esc(p.email)}</p>
 
+          <fieldset class="person-set" id="person-usual">
+            <legend>Usual hours</legend>
+            ${usualPicker(p.usual_in, p.usual_out)}
+            <p class="hint">Shows at the top of the Time in list on their timesheet, so one pick fills in their shift. They can change it too.</p>
+          </fieldset>
+
           <fieldset class="person-set">
             <legend>Special duties</legend>
             <div class="duty-checks">${dutyBoxes}</div>
@@ -2545,6 +2622,7 @@
         </form>`);
 
       const f = $('#person-form');
+      bindUsualPicker($('#person-usual'));
       $('#person-cancel').onclick = closeModal;
       f.onsubmit = (e) => {
         e.preventDefault();
@@ -2556,6 +2634,10 @@
           reports_to: f.reports_to.value || null
         };
         if (!self) update.role = f.role.value;
+        let usual;
+        try { usual = readUsualPicker($('#person-usual')); } catch (err) { toast(err.message, true); return; }
+        if (!usual) { toast('Pick both times for the custom usual hours, or choose None.', true); return; }
+        Object.assign(update, usual);
         const checks = $$('input[data-duty]', f);
         const add = checks.filter((c) => c.checked && !has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
         const remove = checks.filter((c) => !c.checked && has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
