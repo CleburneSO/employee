@@ -17,6 +17,7 @@
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
   const PERIOD_ANCHOR = cfg.PAY_PERIOD_START || '2025-06-12';
+  const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-10-01';   // the portal's first pay period; nothing earlier is offered
   const LOGO = cfg.LOGO === undefined ? 'logo.png' : cfg.LOGO;   // '' = no logo
   // Logo image; hides itself if the file isn't there
   const logoImg = (cls) => LOGO
@@ -98,12 +99,17 @@
   const periodDays = (s) => [...Array(PERIOD_DAYS)].map((_, i) => isoDate(addDays(parseDate(s), i)));
   function periodOptions(extra = [], back = 8, ahead = 1) {
     const cur = periodStartFor(new Date());
-    const set = new Set(extra);
-    for (let i = ahead; i >= -back; i--) set.add(isoDate(addDays(cur, i * PERIOD_DAYS)));
+    const set = new Set(extra.filter((p) => p >= FIRST_PERIOD));
+    for (let i = ahead; i >= -back; i--) {
+      const p = isoDate(addDays(cur, i * PERIOD_DAYS));
+      if (p >= FIRST_PERIOD) set.add(p);
+    }
+    if (!set.size) set.add(FIRST_PERIOD);
     return [...set].sort().reverse();
   }
-  const currentPeriod = () => isoDate(periodStartFor(new Date()));
-  const previousPeriod = () => isoDate(addDays(periodStartFor(new Date()), -PERIOD_DAYS));
+  const atLeastFirst = (p) => (p < FIRST_PERIOD ? FIRST_PERIOD : p);
+  const currentPeriod = () => atLeastFirst(isoDate(periodStartFor(new Date())));
+  const previousPeriod = () => atLeastFirst(isoDate(addDays(periodStartFor(new Date()), -PERIOD_DAYS)));
   const periodSelect = (id, selected, extra = []) =>
     `<select id="${id}">${periodOptions(extra).map((p) =>
       `<option value="${p}" ${p === selected ? 'selected' : ''}>${periodLabel(p)}${p === currentPeriod() ? ' (current)' : ''}</option>`).join('')}</select>`;
