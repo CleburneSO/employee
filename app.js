@@ -550,7 +550,8 @@
       i.closest('tr').classList.toggle('from-times', auto);
     });
     const x = readExtras();
-    const special = readDuties().reduce((a, d) => a + d.hours, 0);
+    // lines that aren't paid (e.g. Comp Time Earned) print but don't count toward hours to be paid
+    const special = readDuties().filter((d) => $(`#d-${d.duty_id}`)?.dataset.paid !== 'false').reduce((a, d) => a + d.hours, 0);
     $$('.duty-input').forEach((i) => i.closest('tr').classList.toggle('has-hours', num(i.value) > 0));
     const paid = worked + special + Object.values(x).reduce((a, b) => a + b, 0);
     $('#ts-total').textContent = hrs(worked);
@@ -603,10 +604,10 @@
                 <th><label for="x-${k}">${esc(label)}</label></th>
                 <td><input type="number" id="x-${k}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
                 <td class="hint">${esc(hint)}</td></tr>`).join('')}
-              ${myDuties.map((d) => `<tr class="duty-row">
+              ${myDuties.map((d) => `<tr class="duty-row${d.paid === false ? ' unpaid' : ''}">
                 <th><label for="d-${d.id}">${esc(d.label)}</label> <span class="chip">${esc(d.name)}</span></th>
-                <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
-                <td class="hint">${esc(d.note)}<span class="auto-note">Filled in from your ${esc(d.name)} time blocks above.</span></td></tr>`).join('')}
+                <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" data-paid="${d.paid === false ? 'false' : 'true'}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
+                <td class="hint">${esc(d.note)}${d.paid === false && !/not added/i.test(d.note || '') ? ' <em>Not added to Hours To Be Paid.</em>' : ''}<span class="auto-note">Filled in from your ${esc(d.name)} time blocks above.</span></td></tr>`).join('')}
               <tr class="total"><th>Total Hours To Be Paid</th><td class="num" id="ts-paid">0</td><td></td></tr>
             </tbody>
           </table></div>
@@ -2461,12 +2462,12 @@
       <section class="card">
         <details class="fold">
           <summary><h2>Special duties setup</h2></summary>
-          <p class="muted">Grant and automatic overtime lines such as K9, DEA or Supervisor. <strong>Timesheet line</strong> and <strong>Note</strong> print on the timesheet. <strong>Auto hours</strong> are filled in for the person each pay period (they can change them). <strong>Everyone</strong> shows the line on every timesheet. Turn off <strong>Active</strong> to retire a duty — past timesheets keep it. Give people a duty with <strong>Edit</strong> next to their name.</p>
+          <p class="muted">Grant and automatic overtime lines such as K9, DEA or Supervisor. <strong>Timesheet line</strong> and <strong>Note</strong> print on the timesheet. <strong>Auto hours</strong> are filled in for the person each pay period (they can change them). <strong>Everyone</strong> shows the line on every timesheet. Untick <strong>Paid</strong> for lines that print but aren’t added to Total Hours To Be Paid (like Comp Time Earned). Turn off <strong>Active</strong> to retire a duty — past timesheets keep it. Give people a duty with <strong>Edit</strong> next to their name.</p>
           <div class="table-wrap"><table class="list duties">
-            <thead><tr><th>Short name</th><th>Timesheet line</th><th>Note</th><th>Auto hours</th><th>Everyone</th><th>Active</th><th></th></tr></thead>
+            <thead><tr><th>Short name</th><th>Timesheet line</th><th>Note</th><th>Auto hours</th><th>Everyone</th><th>Paid</th><th>Active</th><th></th></tr></thead>
             <tbody>
               ${duties.map((d) => dutyRow(d)).join('')}
-              ${dutyRow({ id: '', name: '', label: '', note: '', default_hours: 0, everyone: false, active: true })}
+              ${dutyRow({ id: '', name: '', label: '', note: '', default_hours: 0, everyone: false, paid: true, active: true })}
             </tbody>
           </table></div>
         </details>
@@ -2611,7 +2612,8 @@
           note: $('.d-note', tr).value.trim(),
           default_hours: round2(num($('.d-default', tr).value)),
           everyone: $('.d-everyone', tr).checked,
-          active: $('.d-active', tr).checked
+          active: $('.d-active', tr).checked,
+          paid: $('.d-paid', tr).checked
         };
         withBusy(b, async () => {
           if (!row.name) throw new Error('Give the duty a short name, like K9.');
@@ -2637,6 +2639,7 @@
       <td><input class="d-note" value="${esc(d.note)}" placeholder="Optional"></td>
       <td><input class="d-default" type="number" min="0" step="0.25" value="${Number(d.default_hours) || ''}" placeholder="0"></td>
       <td class="center"><input type="checkbox" class="d-everyone" ${d.everyone ? 'checked' : ''}></td>
+      <td class="center"><input type="checkbox" class="d-paid" ${d.paid !== false ? 'checked' : ''} title="Add these hours to Total Hours To Be Paid"></td>
       <td class="center"><input type="checkbox" class="d-active" ${d.active ? 'checked' : ''}></td>
       <td class="right"><button class="btn small ${d.id ? '' : 'primary'} d-save">${d.id ? 'Save' : 'Add'}</button></td>
     </tr>`;
