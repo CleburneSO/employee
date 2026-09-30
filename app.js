@@ -16,8 +16,10 @@
   const ORG = cfg.COMPANY_NAME || 'Employee Portal';
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
-  const PERIOD_ANCHOR = cfg.PAY_PERIOD_START || '2025-06-12';
-  const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-09-17';   // the portal's first pay period; nothing earlier is offered
+  // The portal's first pay period. Every pay period is counted in 14-day steps from this date,
+  // and nothing earlier is offered. (PAY_PERIOD_START in config.js is no longer used.)
+  const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-09-17';
+  const PERIOD_ANCHOR = FIRST_PERIOD;
   const LOGO = cfg.LOGO === undefined ? 'logo.png' : cfg.LOGO;   // '' = no logo
   // Logo image; hides itself if the file isn't there
   const logoImg = (cls) => LOGO
@@ -99,7 +101,9 @@
   const periodDays = (s) => [...Array(PERIOD_DAYS)].map((_, i) => isoDate(addDays(parseDate(s), i)));
   function periodOptions(extra = [], back = 8, ahead = 1) {
     const cur = periodStartFor(new Date());
-    const set = new Set(extra.filter((p) => p >= FIRST_PERIOD));
+    // only real pay periods: on or after the first one and on the 14-day schedule
+    const onSchedule = (p) => p >= FIRST_PERIOD && Math.round((parseDate(p) - parseDate(FIRST_PERIOD)) / 86400000) % PERIOD_DAYS === 0;
+    const set = new Set(extra.filter(onSchedule));
     for (let i = ahead; i >= -back; i--) {
       const p = isoDate(addDays(cur, i * PERIOD_DAYS));
       if (p >= FIRST_PERIOD) set.add(p);
