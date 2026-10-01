@@ -8,6 +8,9 @@
 // RESEND_API_KEY, MAIL_FROM and SITE_URL.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+// Name in the emails' footer (optional ORG_NAME secret, e.g. "Cleburne County Jail" for the jail portal)
+const ORG_NAME = Deno.env.get('ORG_NAME') || "Cleburne County Sheriff's Office";
+
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -30,7 +33,7 @@ function page(site: string, heading: string, lines: string[], button?: string) {
     <tr><td style="padding:14px 30px 6px;color:#1d2330;font-size:15px;line-height:1.5;">
       <h1 style="margin:0 0 12px;font-size:20px;color:#41512c;">${heading}</h1>${rows}</td></tr>
     <tr><td align="center" style="padding:6px 30px 26px;"><a href="${site}" style="display:inline-block;background:#41512c;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;padding:11px 24px;border-radius:6px;">${button || 'Open the Employee Portal'}</a></td></tr>
-    <tr><td style="padding:12px 30px;border-top:1px solid #e3e6ec;color:#98a1b0;font-size:12px;">Cleburne County Sheriff's Office Employee Portal · automated message, please don't reply</td></tr>
+    <tr><td style="padding:12px 30px;border-top:1px solid #e3e6ec;color:#98a1b0;font-size:12px;">${esc(ORG_NAME)} Employee Portal · automated message, please don't reply</td></tr>
   </table></td></tr></table>`;
 }
 

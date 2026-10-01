@@ -161,7 +161,8 @@ One-time setup:
 1. **supabase.com → New project** (e.g. "CCSO Jail").
 2. **SQL Editor:** run `schema.sql`.
 3. **Authentication → Sign In / Providers:** turn off "Allow new users to sign up". **URL Configuration:** Site URL and Redirect URLs `https://ccsoportal.com/jail/`. **Emails → SMTP:** the same Resend sender as the Sheriff's Office project.
-4. **Edge Functions:** deploy `notify`, `invite-user`, `timeoff-alert`, `timesheet-reminder` and `event-reminder` from this repo (each with "Verify JWT" off). **Secrets:** `RESEND_API_KEY` and `MAIL_FROM` as for the Sheriff's Office, and `SITE_URL` = `https://ccsoportal.com/jail/`.
+4. **Edge Functions:** deploy `notify`, `invite-user`, `timeoff-alert`, `timesheet-reminder` and `event-reminder` from this repo (each with "Verify JWT" off). **Secrets:** `RESEND_API_KEY` (a Resend key), `MAIL_FROM` = `Cleburne County Jail <noreply@ccsoportal.com>`, `SITE_URL` = `https://ccsoportal.com/jail/`, and `ORG_NAME` = `Cleburne County Jail` (the name in the emails' footer).
+   **Authentication → Emails → Templates:** paste `jail/email-invite.html` into **Invite user** and `jail/email-reset-password.html` into **Reset password** (each file's top lines give the subject to use).
 5. **SQL Editor:** run `timesheet-reminder.sql` and `event-reminder.sql`, after changing the address on the line marked ▼ near the top of each to the jail project's address (Project Settings → Data API → Project URL).
 6. **`jail/config.js`:** paste the jail project's URL and anon / publishable key over `YOUR-PROJECT` / `YOUR-ANON-KEY`.
 7. **Invite** the jail administrator, then run in the jail project's SQL Editor: `update public.profiles set role = 'manager', timeoff_approver = true where email = '…';` (do the same for the sheriff, without `timeoff_approver` if he shouldn't get the emails). Optionally make yourself site owner there too (`is_owner = true`). Then invite jail staff from the Team tab.
