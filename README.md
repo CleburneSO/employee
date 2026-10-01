@@ -124,6 +124,7 @@ The site emails people when something involves them:
 | Added to a court date / training / event | Those deputies |
 | An event they're on changes time or place, or is deleted | Those deputies |
 | New announcement ("Also email this to everyone" box, off by default) | Everyone |
+| Someone requests time off or logs comp time | The time-off approvers (see below) |
 | Time off approved / denied | That employee |
 | Timesheet sent back | That employee |
 
@@ -134,9 +135,13 @@ Setup (uses your Resend account, with ccsoportal.com verified):
    - `MAIL_FROM`: `Cleburne County Sheriff's Office <noreply@ccsoportal.com>`
    - `SITE_URL`: `https://ccsoportal.com/`
 
+3. For time-off requests: **Deploy a new function** → **Via Editor** → name it **`timeoff-alert`** → paste all of `supabase-timeoff-alert-function.ts` → **Deploy**, then turn **off** its "Verify JWT" setting. It uses the same three secrets.
+
+**Time-off approvers:** on the **Team** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
+
 If alerts aren't set up, everything still saves; the site shows a one-time note that the email couldn't be sent. Deactivated people never get emails.
 
 ## Security features
 
 - **Auto sign-out:** after 28 minutes with no activity, a warning appears with a 2-minute countdown and a **Stay signed in** button. Any mouse, key or touch activity resets it. At 30 minutes the person is signed out and sees a note on the sign-in page. It works across tabs and when a phone wakes up. To change the time, add `IDLE_MINUTES: 20,` (for example) to `config.js`.
-- **Audit log** (managers, **Audit Log** tab): the database records every change to timesheets, time off, case numbers, off-duty jobs and requests, calendar events and tags, announcements, people, roles and duties: who, when, what, and before → after. Filter by who did it, whose record it is, area and date; click **Details** for the field-by-field changes. Entries can't be edited or deleted from the website, not even by managers. Signature images aren't copied into the log. Changes made directly in the Supabase dashboard show as "Dashboard / system". Sign-ins themselves are in Supabase → Logs → Auth.
+- **Audit log** (site owner only, **Audit Log** tab): the database records every change to timesheets, time off, case numbers, off-duty jobs and requests, calendar events and tags, announcements, people, roles and duties: who, when, what, and before → after. Filter by who did it, whose record it is, area and date; click **Details** for the field-by-field changes. Entries can't be edited or deleted from the website, not even by managers. Signature images aren't copied into the log. Changes made directly in the Supabase dashboard show as "Dashboard / system". Sign-ins themselves are in Supabase → Logs → Auth.

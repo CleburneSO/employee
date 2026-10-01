@@ -71,6 +71,11 @@
   const me = () => state.session.user.id;
   const isManager = () => state.profile?.role === 'manager';
   const isOwner = () => isManager() && !!state.profile?.is_owner;   // site owner: set only from the Supabase SQL Editor
+  // Time off is approved by managers ticked "Approves time off" on the Team tab (the sheriff and chief deputy).
+  // If nobody is ticked, any manager can (the database applies the same rule).
+  const timeOffApprovers = () => Object.values(state.people).filter((p) => p.role === 'manager' && p.active !== false && p.timeoff_approver);
+  const canApproveTimeOff = () => isManager() && (!!state.profile?.timeoff_approver || !timeOffApprovers().length);
+  const approverNames = () => timeOffApprovers().map((p) => p.full_name || p.email).join(' or ');
   const round2 = (n) => Math.round(n * 100) / 100;
   const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
   const hrs = (v) => String(Number(Number(v || 0).toFixed(2)));   // 12, 12.5, 0.5
@@ -313,7 +318,7 @@
   }
 
   async function loadPeople() {
-    const { data, error } = await sb.from('profiles').select('id, full_name, email, role, active, deactivated_at, patrol, shift, is_supervisor, reports_to, usual_in, usual_out').order('full_name');
+    const { data, error } = await sb.from('profiles').select('*').order('full_name');
     if (error) throw error;
     state.people = Object.fromEntries(data.map((p) => [p.id, p]));
     return data;
@@ -1185,11 +1190,12 @@
       const hours = Number(ce.hours.value);
       withBusy(ce.querySelector('button'), async () => {
         if (!(hours > 0) || !isHalfStep(hours)) throw new Error('Hours must be in quarter-hour steps (for example 1, 1.25 or 2.5).');
-        const { error } = await sb.from('time_off_requests').insert({
+        const { data: req, error } = await sb.from('time_off_requests').insert({
           user_id: me(), type: 'comp_earned', start_date: ce.date.value, end_date: ce.date.value,
           hours, reason: ce.reason.value.trim()
-        });
+        }).select('id').single();
         if (error) throw error;
+        alertApprovers(req.id);
         toast('Comp time submitted for approval.');
         showView('timeoff');
       });
@@ -1220,11 +1226,12 @@
       withBusy(form.querySelector('button[type=submit]'), async () => {
         if (form.end.value < form.start.value) throw new Error('Last day must be on or after the first day.');
         if (!(hours > 0) || !isHalfStep(hours)) throw new Error('Hours must be in quarter-hour steps (for example 4, 4.25 or 12).');
-        const { error } = await sb.from('time_off_requests').insert({
+        const { data: req, error } = await sb.from('time_off_requests').insert({
           user_id: me(), type: form.type.value, start_date: form.start.value,
           end_date: form.end.value, hours, reason: form.reason.value.trim() || null
-        });
+        }).select('id').single();
         if (error) throw error;
+        alertApprovers(req.id);
         toast('Request submitted.');
         showView('timeoff');
       });
@@ -1238,7 +1245,7 @@
       <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Dates</th><th class="num">Hours</th><th>Type</th><th>Status</th><th>Note</th><th></th></tr></thead>
       <tbody>${list.map((r) => {
         let action = '';
-        if (mgr && r.status === 'pending') action = `<button class="btn small" data-to="${r.id}">Review</button>`;
+        if (mgr && r.status === 'pending' && canApproveTimeOff()) action = `<button class="btn small" data-to="${r.id}">Review</button>`;
         else if (mgr) action = `<button class="btn small" data-to="${r.id}">View</button>`;
         else if (r.status === 'pending') action = `<button class="btn small" data-cancel="${r.id}">Cancel</button>`;
         return `<tr class="${r.type === 'comp_earned' ? 'is-earned' : ''}">
@@ -1284,8 +1291,9 @@
         </dl>
         ${reviewInfo(r)}
       </div>
-      ${isManager() && r.status === 'pending' ? reviewControls('Deny') : ''}`);
-    if (isManager() && r.status === 'pending') bindReview('time_off_requests', r.id, 'denied');
+      ${r.status !== 'pending' || !isManager() ? '' : canApproveTimeOff() ? reviewControls('Deny')
+        : `<p class="notice">Waiting on ${esc(approverNames())} to approve or deny.</p>`}`);
+    if (r.status === 'pending' && canApproveTimeOff()) bindReview('time_off_requests', r.id, 'denied');
     if (isComp(r.type) && r.hours != null) {
       compBalances().then((list) => {
         const b = list.find((x) => x.user_id === r.user_id);
@@ -1332,6 +1340,7 @@
       <section class="card"><h2>Timesheets awaiting approval${forWho} <span class="count">${ts.data.length}</span></h2>
         <div id="ts-pending">${timesheetTable(ts.data, true)}</div></section>
       <section class="card"><h2>Time off awaiting approval${forWho} <span class="count">${to.data.length}</span></h2>
+        ${timeOffApprovers().length ? `<p class="hint">Approved or denied by ${esc(approverNames())}.</p>` : ''}
         <div id="to-pending">${timeOffTable(to.data, true)}</div></section>
       <section class="card">
         <details class="fold" ${who ? 'open' : ''}>
@@ -1480,6 +1489,16 @@
       console.warn('Email alert not sent:', err.message);
       if (!alertWarned) { alertWarned = true; setTimeout(() => toast('Saved — but the email alert couldn’t be sent (see README: “Email alerts”).', true), 1200); }
     }
+  }
+
+  // Email the sheriff / chief deputy about a new time-off request. Quiet if it fails: the
+  // request is saved and shows on their Approvals tab either way.
+  async function alertApprovers(id) {
+    try {
+      const { data, error } = await sb.functions.invoke('timeoff-alert', { body: { id } });
+      if (error) throw new Error(await functionError(error, 'timeoff-alert'));
+      if (data?.error) throw new Error(data.error);
+    } catch (err) { console.warn('Time-off alert not sent:', err.message); }
   }
 
   /* ---------------- shared: names, dates & times ---------------- */
@@ -2601,7 +2620,7 @@
     const patrolText = (p) => p.patrol
       ? `<span>${p.shift ? esc(p.shift) + ' Shift' : '<span class="error-text">No shift</span>'}${p.reports_to ? ` · <span class="muted">${esc(nameOf(p.reports_to))}</span>` : ''}</span>`
       : '<span class="muted">—</span>';
-    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}</span>`;
+    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}${p.role === 'manager' && p.timeoff_approver ? ' <span class="chip muted-chip">Approves time off</span>' : ''}</span>`;
     const matches = (p) => {
       const q = tf.q.trim().toLowerCase();
       if (q && !`${p.full_name} ${p.email}`.toLowerCase().includes(q)) return false;
@@ -2737,6 +2756,11 @@
             <div class="duty-checks">${dutyBoxes}</div>
           </fieldset>
 
+          ${'timeoff_approver' in p ? `<fieldset class="person-set">
+            <legend>Time off</legend>
+            <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''}> <span><strong>Approves time off</strong> — gets an email for every time-off request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.</span></label>
+          </fieldset>` : ''}
+
           <fieldset class="person-set">
             <legend>Patrol stats</legend>
             <label class="check"><input type="checkbox" name="patrol" ${p.patrol ? 'checked' : ''}> <span><strong>Patrol</strong> — logs stats and shows up in them</span></label>
@@ -2768,6 +2792,10 @@
           reports_to: f.reports_to.value || null
         };
         if (!self) update.role = f.role.value;
+        if (f.timeoff_approver) {
+          update.timeoff_approver = f.timeoff_approver.checked;
+          if (update.timeoff_approver && (update.role || p.role) !== 'manager') { toast('Only managers can approve time off. Change their role to Manager first.', true); return; }
+        }
         let usual;
         try { usual = readUsualPicker($('#person-usual')); } catch (err) { toast(err.message, true); return; }
         if (!usual) { toast('Pick both times for the custom usual hours, or choose None.', true); return; }

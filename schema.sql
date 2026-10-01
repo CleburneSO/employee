@@ -30,6 +30,7 @@ create table if not exists public.profiles (
   usual_in text,
   usual_out text,
   is_owner boolean default false not null,
+  timeoff_approver boolean default false not null,
   constraint profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE,
   constraint profiles_pkey PRIMARY KEY (id),
   constraint profiles_reports_to_fkey FOREIGN KEY (reports_to) REFERENCES profiles(id) ON DELETE SET NULL,
@@ -273,6 +274,7 @@ create table if not exists public.time_off_requests (
   reviewed_at timestamp with time zone,
   created_at timestamp with time zone default now() not null,
   hours numeric(6,2),
+  approver_alerted_at timestamp with time zone,
   constraint time_off_requests_check CHECK ((end_date >= start_date)),
   constraint time_off_requests_hours_check CHECK (((hours IS NULL) OR ((hours > (0)::numeric) AND (hours <= (999)::numeric) AND ((hours * (4)::numeric) = round((hours * (4)::numeric)))))),
   constraint time_off_requests_pkey PRIMARY KEY (id),
@@ -330,6 +332,10 @@ create table if not exists public.timesheet_drafts (
 );
 alter table public.timesheet_drafts enable row level security;
 
+-- Columns added after the tables were first created
+alter table public.profiles add column if not exists timeoff_approver boolean default false not null;
+alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
+
 -- ---------------------------------------------------------------- indexes
 
 create index if not exists audit_log_actor_idx ON public.audit_log USING btree (actor, at DESC);
@@ -385,6 +391,20 @@ CREATE OR REPLACE FUNCTION public.is_owner()
 AS $function$
   select exists (select 1 from public.profiles
                  where id = auth.uid() and is_owner and coalesce(active, true));
+$function$
+;
+
+-- Can the logged-in user approve or deny time off? Managers ticked "Approves time off" on the
+-- Team tab (the sheriff and chief deputy). If nobody is ticked, any manager can, so requests never get stuck.
+CREATE OR REPLACE FUNCTION public.is_timeoff_approver()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select public.is_manager() and (
+    exists (select 1 from public.profiles where id = auth.uid() and timeoff_approver)
+    or not exists (select 1 from public.profiles where role = 'manager' and active and timeoff_approver));
 $function$
 ;
 
@@ -565,6 +585,7 @@ begin
     new.shift := null;
     new.is_supervisor := false;
     new.reports_to := null;
+    new.timeoff_approver := false;
     return new;
   end if;
 
@@ -580,6 +601,11 @@ begin
     new.shift := old.shift;
     new.is_supervisor := old.is_supervisor;
     new.reports_to := old.reports_to;
+    new.timeoff_approver := old.timeoff_approver;
+  end if;
+  -- Only managers approve time off
+  if new.role <> 'manager' then
+    new.timeoff_approver := false;
   end if;
 
   if old.id = auth.uid() and old.role = 'manager' and new.role <> 'manager' then
@@ -774,6 +800,7 @@ begin
     new.reviewed_by  := null;
     new.reviewed_at  := null;
     new.created_at   := now();
+    new.approver_alerted_at := null;
     if new.type not in ('vacation', 'sick', 'comp', 'comp_earned') then
       raise exception 'Time off must be Vacation, Sick or Comp time.';
     end if;
@@ -801,9 +828,14 @@ begin
   new.hours := old.hours;
   new.reason := old.reason;
   new.created_at := old.created_at;
+  new.approver_alerted_at := old.approver_alerted_at;
 
-  -- Manager decision
-  if public.is_manager()
+  -- Manager decision (only the time-off approvers: the sheriff and chief deputy)
+  if public.is_manager() and not public.is_timeoff_approver()
+     and new.status in ('approved', 'denied') and new.status is distinct from old.status then
+    raise exception 'Only the sheriff or chief deputy can approve or deny time off.';
+  end if;
+  if public.is_timeoff_approver()
      and new.status in ('approved', 'denied')
      and new.status is distinct from old.status then
     new.reviewed_by := auth.uid();
@@ -1064,7 +1096,7 @@ declare
   diff jsonb := '{}'::jsonb;
   k text;
   -- noisy or huge fields that aren't worth storing
-  skip text[] := array['signature_data', 'updated_at', 'updated_by'];
+  skip text[] := array['signature_data', 'updated_at', 'updated_by', 'approver_alerted_at'];
 begin
   -- Reserving a case number bumps the counter by one; that's already logged as the new case number
   if tg_table_name = 'case_counters' and tg_op = 'UPDATE'
