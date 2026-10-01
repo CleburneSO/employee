@@ -1901,7 +1901,7 @@
       <h2>${e.id ? 'Edit my event' : 'Add my event'}</h2>
       <p class="hint">Only you can see this. It’s for your own planning and doesn’t notify anyone.</p>
       <form id="pe-form" autocomplete="off">
-        <label>Title<input name="title" required maxlength="200" value="${esc(e.title || '')}" placeholder="e.g. Dentist, Day off, Kid’s game"></label>
+        <label>Title<input name="title" required maxlength="200" value="${esc(e.title || '')}" placeholder="e.g. Training, Vacation, To-Do, etc."></label>
         <label class="check"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
         <div class="row">
           <label>Date<input type="date" name="sd" required value="${sd}"></label>
