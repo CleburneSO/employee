@@ -587,6 +587,10 @@ table.audit-diff td:first-child { font-weight: 600; width: 22%; }
 .ev-personal, .ev-dot.ev-personal { background: #def0f3; border-color: #1f7a8c; color: #134d58; }
 .ev-dot.ev-personal { background: #1f7a8c; }
 .tag-personal { background: #def0f3; color: #134d58; }
+/* off-duty jobs with open spots */
+.ev-offduty, .ev-dot.ev-offduty { background: #e3eefa; border-color: #2f6fb0; color: #1b4470; }
+.ev-dot.ev-offduty { background: #2f6fb0; }
+.tag-offduty { background: #e3eefa; color: #1b4470; }
 .holiday-note { background: #f7eef9; border-color: #e2c6e8; }
 
 /* calendar markers: solid colors + red dot for "you're on it" */
@@ -607,6 +611,7 @@ table.audit-diff td:first-child { font-weight: 600; width: 22%; }
   .ev-holiday { background: #8e3a9d; }
   .ev-other { background: #6c7a92; }
   .ev-personal { background: #1f7a8c; }
+  .ev-offduty { background: #2f6fb0; }
 }
 
 /* ---- phone fixes for forms (iPhone date/time boxes have a built-in minimum width) ---- */
@@ -893,6 +898,9 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
   :root[data-theme="dark"] .ev-personal, :root[data-theme="dark"] .ev-dot.ev-personal { background: #18343a; color: #a9dbe4; }
   :root[data-theme="dark"] .ev-dot.ev-personal { background: #1f7a8c; }
   :root[data-theme="dark"] .tag-personal { background: #18343a; color: #a9dbe4; }
+  :root[data-theme="dark"] .ev-offduty, :root[data-theme="dark"] .ev-dot.ev-offduty { background: #1a2b40; color: #b4cff0; }
+  :root[data-theme="dark"] .ev-dot.ev-offduty { background: #2f6fb0; }
+  :root[data-theme="dark"] .tag-offduty { background: #1a2b40; color: #b4cff0; }
   :root[data-theme="dark"] .holiday-note { background: #2e2032; border-color: #533e58; }
   :root[data-theme="dark"] input[type="date"], :root[data-theme="dark"] input[type="time"] { background: #222222; }
   :root[data-theme="dark"] .stat-counter.auto { background: #2b2e22; }

@@ -1641,7 +1641,7 @@
   const fromLocalInput = (date, time) => date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
   const multiline = (s) => esc(s || '').replace(/\n/g, '<br>');
   const EVENT_KINDS = [['training', 'Training'], ['court', 'Court'], ['holiday', 'Paid holiday'], ['other', 'Other']];
-  const kindLabel = (k) => (k === 'personal' ? 'My event' : (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1]);
+  const kindLabel = (k) => (k === 'personal' ? 'My event' : k === 'offduty' ? 'Off-duty' : (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1]);
   function peoplePicker(list, selected = new Set()) {
     return `<div class="picker-tools"><button type="button" class="btn small" data-pick="all">Select all</button><button type="button" class="btn small" data-pick="none">Clear</button><span class="hint picker-count"></span></div>
     <div class="people-picker">${list.filter((p) => p.active !== false).map((p) =>
@@ -1674,7 +1674,30 @@
       if (error) throw error;
       data.forEach((t) => (tags[t.event_id] ||= []).push(t.user_id));
     }
-    const mine = (e) => e.owner_id === me() || (tags[e.id] || []).includes(me());
+    // Off-duty jobs: shown while spots are open (and not past), or to the people approved to work them
+    const jobFrom = new Date(Math.min(gridStart, new Date(now.getFullYear(), now.getMonth(), now.getDate())));
+    const jobTo = new Date(Math.max(gridEnd, soonEnd));
+    const jobsR = await sb.from('offduty_jobs').select('*').neq('status', 'cancelled')
+      .gte('starts_at', jobFrom.toISOString()).lt('starts_at', jobTo.toISOString()).order('starts_at');
+    let jobEv = [];
+    if (!jobsR.error && jobsR.data.length) {
+      const reqR = await sb.from('offduty_requests').select('job_id, user_id, status').in('job_id', jobsR.data.map((j) => j.id));
+      const reqs = reqR.error ? [] : reqR.data;
+      jobEv = jobsR.data.map((j) => {
+        const approved = reqs.filter((r) => r.job_id === j.id && r.status === 'approved');
+        const left = Math.max(0, j.spots - approved.length);
+        const mineJob = approved.some((r) => r.user_id === me());
+        const open = j.status === 'open' && left > 0 && new Date(j.starts_at) > now;
+        return (open || mineJob) && { id: `job:${j.id}`, kind: 'offduty', isJob: true, job: j, left, mineJob,
+          title: j.title, starts_at: j.starts_at, ends_at: j.ends_at, all_day: false, location: j.location, details: j.details };
+      }).filter(Boolean);
+    }
+    const inRange = (e, a, z) => new Date(e.starts_at) >= a && new Date(e.starts_at) < z;
+    monthEv.data.push(...jobEv.filter((e) => inRange(e, gridStart, gridEnd)));
+    soonEv.data.push(...jobEv.filter((e) => inRange(e, new Date(now.getFullYear(), now.getMonth(), now.getDate()), soonEnd)));
+    soonEv.data.sort((x, y) => x.starts_at.localeCompare(y.starts_at));
+    allEv.push(...jobEv);
+    const mine = (e) => (e.isJob ? e.mineJob : e.owner_id === me() || (tags[e.id] || []).includes(me()));
     // Deputies only ever receive their own + "everyone" events (the database filters them).
     // Managers see all, and can switch to just their own.
     const justMine = isManager() && state.calMine;
@@ -1713,7 +1736,7 @@
             <button class="btn small" id="cal-next" aria-label="Next month">›</button>
             <button class="btn small" id="cal-today">Today</button>
           </div>
-          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="ev-dot ev-personal"></span>My events</span><span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
+          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="ev-dot ev-personal"></span>My events</span><span class="lg"><span class="ev-dot ev-offduty"></span>Off-duty jobs</span><span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
           <div class="cal-tools">
             ${isManager() ? `<div class="seg-toggle" role="group" aria-label="Whose events">
               <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
@@ -1741,7 +1764,7 @@
         ${soonEv.data.length ? `<ul class="agenda">${soonEv.data.map((e) => `<li class="${mine(e) ? 'is-mine' : ''}">
             <button class="agenda-item" data-ev="${e.id}">
               <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
-              <span class="agenda-title">${esc(e.title)}${mine(e) && !e.owner_id ? ' <span class="tag tag-mine">You</span>' : ''}${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}</span>
+              <span class="agenda-title">${esc(e.title)}${mine(e) && !e.owner_id ? ' <span class="tag tag-mine">You</span>' : ''}${e.isJob && !e.mineJob ? ` <span class="muted">${e.left} spot${e.left === 1 ? '' : 's'} open</span>` : ''}${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}</span>
               <span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}${e.location ? ` · ${esc(e.location)}` : ''}</span>
             </button></li>`).join('')}</ul>` : '<p class="muted">Nothing scheduled.</p>'}
       </section>`;
@@ -1783,6 +1806,7 @@
   }
 
   function openEvent(e, tagged, people) {
+    if (e.isJob) return openJobPeek(e);
     const names = tagged.map(dirName).sort();
     openModal(`
       <div class="doc">
@@ -1834,6 +1858,29 @@
     a.download = `${(e.title || 'event').replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'event'}.ics`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  // An off-duty job on the calendar: details, and a way to the Off-Duty Jobs tab to request it
+  function openJobPeek(e) {
+    const j = e.job;
+    openModal(`
+      <div class="doc">
+        <span class="tag tag-offduty">Off-duty job</span>${e.mineJob ? ' <span class="tag tag-mine">You’re working it</span>' : ''}
+        <h2 style="margin-top:.4rem">${esc(j.title)}</h2>
+        <dl class="details">
+          <dt>When</dt><dd>${esc(fmtWhen(j.starts_at, j.ends_at, false))}</dd>
+          ${j.location ? `<dt>Where</dt><dd>${esc(j.location)}</dd>` : ''}
+          ${j.pay ? `<dt>Pay</dt><dd>${esc(j.pay)}</dd>` : ''}
+          <dt>Spots</dt><dd>${e.left ? `${e.left} of ${j.spots} open` : `All ${j.spots} filled`}</dd>
+          ${j.details ? `<dt>Details</dt><dd>${multiline(j.details)}</dd>` : ''}
+        </dl>
+        <div class="actions">
+          <button class="btn primary" id="go-offduty" type="button">${e.mineJob ? 'View on Off-Duty Jobs' : 'Request it on Off-Duty Jobs'}</button>
+          ${e.mineJob ? '<button class="btn" id="ev-ics" type="button">Add to my calendar</button>' : ''}
+        </div>
+      </div>`);
+    $('#go-offduty').onclick = () => { closeModal(); showView('offduty'); };
+    $('#ev-ics')?.addEventListener('click', () => addToPhoneCalendar({ ...e, id: j.id, title: `Off-duty: ${j.title}` }));
   }
 
   // A personal event: only its owner can see it (the database enforces this). No emails.
