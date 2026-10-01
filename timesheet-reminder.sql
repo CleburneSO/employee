@@ -1,7 +1,6 @@
 -- =====================================================================
 -- Daily timesheet reminder job
--- Run once in Supabase → SQL Editor → New query → Run, AFTER schema.sql
--- and after deploying the timesheet-reminder Edge Function. Safe to re-run.
+-- Run once in Supabase → SQL Editor → New query → Run, after deploying the timesheet-reminder Edge Function. Safe to re-run.
 --
 -- Every morning at 13:00 UTC (8 AM in summer, 7 AM in winter, Central time)
 -- the database calls the timesheet-reminder function. On the last day of a
@@ -11,6 +10,23 @@
 -- Supabase's built-in scheduler and web-request extensions
 create extension if not exists pg_cron with schema pg_catalog;
 create extension if not exists pg_net with schema extensions;
+
+-- The two tables this needs (also in schema.sql; created here too in case that hasn't been run yet)
+create table if not exists public.timesheet_reminders (
+  user_id uuid not null,
+  period_start date not null,
+  sent_at timestamp with time zone default now() not null,
+  constraint timesheet_reminders_pkey PRIMARY KEY (user_id, period_start),
+  constraint timesheet_reminders_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+alter table public.timesheet_reminders enable row level security;
+create table if not exists public.app_secrets (
+  key text not null,
+  value text not null,
+  constraint app_secrets_pkey PRIMARY KEY (key)
+);
+alter table public.app_secrets enable row level security;
+revoke all on public.app_secrets from anon, authenticated;
 
 -- A random secret only this job and the function know (stored in app_secrets, which
 -- the website can't read). Re-running keeps the existing one.
