@@ -865,8 +865,8 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
   :root[data-theme="dark"] .seg-toggle button.on { background: #4d6334; border-color: #4d6334; color: #fff; }
   :root[data-theme="dark"] .btn.primary:hover { background: #5b7540; }
   :root[data-theme="dark"] .btn.danger { background: transparent; }
-  /* logo sits on a white plate so the green lettering stays readable */
-  :root[data-theme="dark"] .brand-logo, :root[data-theme="dark"] .auth-logo { background: #fff; border-radius: 8px; padding: 3px 8px; }
+  /* default logo swaps to a copy with lighter green lettering so it reads on the dark background */
+  :root[data-theme="dark"] img[src="logo.png"] { content: url("logo-dark.png"); }
   /* the printable timesheet / case log preview stays paper-white */
   :root[data-theme="dark"] .sheet, :root[data-theme="dark"] .case-sheet { background: #fff; color: #000; }
   :root[data-theme="dark"] .modal { background: rgba(0,0,0,.65); }
