@@ -4,7 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cleburne County Sheriff's Office — Employee Portal</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260930b">
+  <script>
+    // Light / dark: the person's choice if they made one, otherwise their device's setting
+    (function () {
+      var t = null; try { t = localStorage.getItem('portal_theme'); } catch (e) {}
+      if (t !== 'dark' && t !== 'light') t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
   <link rel="icon" href="seal.png">
   <link rel="apple-touch-icon" href="seal.png">
 </head>
@@ -21,7 +29,7 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script src="config.js?v=20260930b"></script>
+  <script src="app.js?v=20260930b"></script>
 </body>
 </html>
