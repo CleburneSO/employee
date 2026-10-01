@@ -70,6 +70,7 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const me = () => state.session.user.id;
   const isManager = () => state.profile?.role === 'manager';
+  const isOwner = () => isManager() && !!state.profile?.is_owner;   // site owner: set only from the Supabase SQL Editor
   const round2 = (n) => Math.round(n * 100) / 100;
   const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
   const hrs = (v) => String(Number(Number(v || 0).toFixed(2)));   // 12, 12.5, 0.5
@@ -459,7 +460,8 @@
     const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers']];
     if (canSeeStats()) tabs.push(['stats', 'Stats']);
     tabs.push(['offduty', 'Off-Duty Jobs']);
-    if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team'], ['audit', 'Audit Log']);
+    if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team']);
+    if (isOwner()) tabs.push(['audit', 'Audit Log']);
     if (!tabs.some(([k]) => k === state.view)) state.view = 'calendar';
 
     app.innerHTML = `
@@ -2445,6 +2447,11 @@
 
     el.innerHTML = `
       <section class="card">
+        <h2>Database setup</h2>
+        <p class="muted">Download every table, function and security rule as one SQL file, as a backup or to share for review. It contains no records.</p>
+        <button class="btn" type="button" id="db-export">Download database setup</button>
+      </section>
+      <section class="card">
         <h2>Audit log</h2>
         <p class="muted">Every change made in the portal, recorded by the database. Entries can’t be edited or deleted.</p>
         <form id="audit-f" class="row end audit-filters">
@@ -2482,6 +2489,15 @@
     };
     ['actor', 'subject', 'area'].forEach((n) => { form[n].onchange = () => form.requestSubmit(); });
     if ($('#audit-clear')) $('#audit-clear').onclick = () => { Object.assign(f, { actor: '', subject: '', area: '', from: '', to: '', page: 0 }); showView('audit'); };
+    $('#db-export').onclick = (e) => withBusy(e.currentTarget, async () => {
+      const { data: sql, error: err } = await sb.rpc('export_db_setup');
+      if (err) throw err;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([sql], { type: 'text/plain' }));
+      a.download = `database-setup-${new Date().toISOString().slice(0, 10)}.sql`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
     $('#au-prev').onclick = () => { f.page--; showView('audit'); };
     $('#au-next').onclick = () => { f.page++; showView('audit'); };
     $$('[data-audit]', el).forEach((b) => {

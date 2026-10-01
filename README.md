@@ -48,6 +48,14 @@ In Supabase **Authentication → URL Configuration**:
    ```
 4. Refresh the site — you'll see the **Approvals** and **Team** tabs.
 
+### 4b. Make yourself the site owner
+Run all of `owner.sql` in the **SQL Editor** (change the email at the bottom if yours is different). The site owner is a manager who also:
+- is the only person who can see the **Audit Log** tab (the database enforces this too)
+- can **Download database setup** at the top of the Audit Log: every table, function and security rule as one `.sql` file, with no records
+- can't be demoted or deactivated by other managers
+
+The owner flag can only be set from the SQL Editor, never from the site.
+
 ### 5. Add employees
 Invite each person from **Authentication → Users → Invite user**. They set a password from the email and they're in. You can promote other managers from the **Team** tab.
 
