@@ -485,6 +485,7 @@
         </button>
         <nav class="tabs" id="main-nav">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav>
       </div>
+      <div id="due" class="due-wrap"></div>
       <main id="view"></main>`;
     $('#signout').onclick = () => sb.auth.signOut();
     bindThemeToggle();
@@ -507,8 +508,30 @@
   // Save any timesheet draft that's waiting when the page is hidden or closed
   document.addEventListener('visibilitychange', () => { if (document.hidden) state.flushDraft?.(); });
 
+  // Banner until submitted: last pay period's timesheet, and the current one on its last day
+  async function refreshDue() {
+    const box = $('#due');
+    if (!box) return;
+    const cur = currentPeriod(), prev = previousPeriod();
+    const joined = state.profile.created_at ? isoDate(new Date(state.profile.created_at)) : '';
+    const want = [];
+    if (prev !== cur && periodEnd(prev) >= joined) want.push(prev);
+    if (periodEnd(cur) === isoDate(new Date())) want.push(cur);
+    if (!want.length) { box.innerHTML = ''; return; }
+    const { data, error } = await sb.from('timesheets').select('period_start, status').eq('user_id', me()).in('period_start', want);
+    if (error) return;
+    const status = Object.fromEntries(data.map((t) => [t.period_start, t.status]));
+    box.innerHTML = want.filter((p) => !['submitted', 'approved'].includes(status[p])).map((p) => `<div class="notice warn due"><span>
+      ${status[p] === 'rejected' ? `Your timesheet for <strong>${esc(periodLabel(p))}</strong> was sent back and needs to be resubmitted.`
+        : p === cur ? `Today is the last day of the pay period. Your timesheet for <strong>${esc(periodLabel(p))}</strong> is due.`
+        : `Your timesheet for <strong>${esc(periodLabel(p))}</strong> hasn’t been submitted.`}</span>
+      <button class="btn small primary" type="button" data-due="${p}">Fill it out</button></div>`).join('');
+    $$('[data-due]', box).forEach((b) => { b.onclick = () => { state.tsPeriod = b.dataset.due; showView('timesheets'); }; });
+  }
+
   async function showView(v) {
     state.flushDraft?.();
+    refreshDue();
     state.view = v;
     $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
     const cur = $('.menu-current');
@@ -681,7 +704,7 @@
         <h2>Submit a timesheet</h2>
         <form id="ts-form" autocomplete="off">
           <div class="row">
-            <label>Pay period${periodSelect('ts-period', currentPeriod(), mine.map((t) => t.period_start))}</label>
+            <label>Pay period${periodSelect('ts-period', state.tsPeriod || currentPeriod(), mine.map((t) => t.period_start))}</label>
           </div>
           <div class="usual-bar" id="ts-usual"><span class="usual-label">My usual hours</span>${usualPicker(state.profile.usual_in, state.profile.usual_out)}
             <span class="hint" id="ts-usual-hint">${hasUsual() ? 'Pick <strong>★</strong> at the top of a day’s Time in list to fill in your usual shift.' : 'Set these and your shift shows at the top of each day’s Time in list.'}</span></div>
@@ -732,6 +755,7 @@
       </section>`;
 
     bindTimesheetButtons(el, mine);
+    state.tsPeriod = null;   // a banner's "Fill it out" picks the period once
     $('#ts-all')?.addEventListener('click', (e) => {
       $('#ts-list').innerHTML = timesheetTable(mine, false);
       labelTables($('#ts-list'));

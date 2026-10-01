@@ -332,6 +332,26 @@ create table if not exists public.timesheet_drafts (
 );
 alter table public.timesheet_drafts enable row level security;
 
+-- Timesheet reminder emails already sent (one per person per pay period), so a reminder never goes twice.
+create table if not exists public.timesheet_reminders (
+  user_id uuid not null,
+  period_start date not null,
+  sent_at timestamp with time zone default now() not null,
+  constraint timesheet_reminders_pkey PRIMARY KEY (user_id, period_start),
+  constraint timesheet_reminders_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+alter table public.timesheet_reminders enable row level security;
+
+-- Server-only settings (e.g. the secret the daily reminder job uses). Row Level Security is on with
+-- no rules, so nobody can read this through the website; only Edge Functions and the SQL Editor can.
+create table if not exists public.app_secrets (
+  key text not null,
+  value text not null,
+  constraint app_secrets_pkey PRIMARY KEY (key)
+);
+alter table public.app_secrets enable row level security;
+revoke all on public.app_secrets from anon, authenticated;
+
 -- Columns added after the tables were first created
 alter table public.profiles add column if not exists timeoff_approver boolean default false not null;
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;

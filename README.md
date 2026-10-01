@@ -127,6 +127,7 @@ The site emails people when something involves them:
 | Someone requests time off or logs comp time | The time-off approvers (see below) |
 | Time off approved / denied | That employee |
 | Timesheet sent back | That employee |
+| Last day of the pay period, timesheet not submitted | That person (one reminder) |
 
 Setup (uses your Resend account, with ccsoportal.com verified):
 1. Supabase → **Edge Functions** → **Deploy a new function** → **Via Editor** → name it **`notify`** → paste all of `supabase-notify-function.ts` → **Deploy**, then turn **off** its "Verify JWT" setting (the function checks who's calling itself).
@@ -136,6 +137,10 @@ Setup (uses your Resend account, with ccsoportal.com verified):
    - `SITE_URL`: `https://ccsoportal.com/`
 
 3. For time-off requests: **Deploy a new function** → **Via Editor** → name it **`timeoff-alert`** → paste all of `supabase-timeoff-alert-function.ts` → **Deploy**, then turn **off** its "Verify JWT" setting. It uses the same three secrets.
+
+4. For timesheet reminders: **Deploy a new function** → **Via Editor** → name it **`timesheet-reminder`** → paste all of `supabase-timesheet-reminder-function.ts` → **Deploy**, then turn **off** "Verify JWT". Then run `timesheet-reminder.sql` in the **SQL Editor** (after `schema.sql`). That schedules a daily check at 13:00 UTC (8 AM Central in summer, 7 AM in winter). On the last day of each pay period, everyone active who hasn't submitted gets one reminder email. To see who would get one without sending anything, run `select public.run_timesheet_reminder(true);` and then `select content from net._http_response order by created desc limit 1;`.
+
+**Timesheet banner:** separately, anyone who hasn't submitted sees a banner at the top of the site on the last day of the pay period, and after it ends until they submit, with a **Fill it out** button.
 
 **Time-off approvers:** on the **Team** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
 
