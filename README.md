@@ -89,6 +89,13 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - You can edit details on numbers you reserved; managers can edit any. Mistakes are **voided** with a reason — numbers are never deleted or reused. Only managers can restore a voided number.
 - **Going live:** a manager sets **Next count** under Case number settings to one more than the last number used on paper (e.g. last used 0933 → enter 934).
 
+**Uniforms (Sheriff's Office)**
+- Everyone has a **$500 uniform allowance** per year, resetting every **October 1** (unused money doesn't carry over). The amount is set in `uniform_allowance()` in `schema.sql`.
+- *Uniforms* tab: the balance left this year, a request form with one line per Galls item (item # or link, description, size, quantity, price; the total adds up), and their requests with status (Pending → Approved → Ordered → Received, or Denied / Cancelled). A request can't be more than what's left (requests still waiting count against it); the database enforces this and works out the total itself.
+- The time-off approvers (sheriff and chief deputy) get an email for each request and approve or deny it on *Approvals*. When approving they can change the amount to the actual invoice total; that amount comes out of the allowance and the deputy gets an email.
+- *Payroll & History → Uniform allowance*: everyone's balance (with **Adjust** for money already spent on paper, CSV download), approved orders still to **mark ordered** from Galls and **mark received**, and recent orders. Each order opens as a printable **Uniform / Equipment Order** form (Print / Save PDF).
+- Turned off on the jail portal (`uniforms: false`).
+
 **Managers**
 - The manager pages are under the **Admin** tab (a drop-down on a computer, an "Admin" section in the ☰ menu on a phone): Approvals, Payroll & History, Team, and Audit Log for the site owner. Admin and Approvals show how many items are waiting.
 - *Approvals:* only what's waiting: who **hasn't submitted a timesheet** (on the last day of a pay period, and after it until everyone's in), pending timesheets and time off. Approve or send back / deny with a note. Open any timesheet, time-off request or comp time entry and click **Print / Save PDF** for a paper copy (employees can print their own too).
@@ -123,6 +130,8 @@ The site emails people when something involves them:
 | When | Who gets it |
 |---|---|
 | Off-duty request approved / declined | That deputy |
+| Someone requests uniforms / equipment | The time-off approvers (sheriff and chief deputy), once per request |
+| Uniform order approved / denied | That person |
 | Someone requests an off-duty job | The time-off approvers, e.g. the sheriff and chief deputy (once per request; again only if they withdraw and ask again) |
 | New off-duty job posted ("Email everyone" box, on by default) | Everyone |
 | Added to a court date / training / event | Those deputies |

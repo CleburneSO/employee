@@ -383,6 +383,48 @@ create table if not exists public.app_secrets (
 alter table public.app_secrets enable row level security;
 revoke all on public.app_secrets from anon, authenticated;
 
+-- Uniform / equipment orders (Galls) paid from each person's yearly allowance.
+-- items: [{ item, description, size, qty, price }]; total is worked out by the database.
+create table if not exists public.uniform_orders (
+  id uuid default gen_random_uuid() not null,
+  user_id uuid default auth.uid() not null,
+  fy_start date not null,
+  items jsonb default '[]'::jsonb not null,
+  total numeric(8,2) default 0 not null,
+  approved_total numeric(8,2),
+  note text,
+  status text default 'pending'::text not null,
+  manager_note text,
+  reviewed_by uuid,
+  reviewed_at timestamp with time zone,
+  ordered_at timestamp with time zone,
+  received_at timestamp with time zone,
+  approver_alerted_at timestamp with time zone,
+  created_at timestamp with time zone default now() not null,
+  constraint uniform_orders_pkey PRIMARY KEY (id),
+  constraint uniform_orders_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'denied'::text, 'cancelled'::text]))),
+  constraint uniform_orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE RESTRICT,
+  constraint uniform_orders_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES profiles(id)
+);
+alter table public.uniform_orders enable row level security;
+
+-- Manager adjustments to someone's uniform allowance for one allowance year (e.g. money already spent on paper)
+create table if not exists public.uniform_adjustments (
+  id uuid default gen_random_uuid() not null,
+  user_id uuid not null,
+  fy_start date not null,
+  amount numeric(8,2) not null,
+  note text not null,
+  created_by uuid,
+  created_at timestamp with time zone default now() not null,
+  constraint uniform_adjustments_pkey PRIMARY KEY (id),
+  constraint uniform_adjustments_amount_check CHECK (((amount <> (0)::numeric) AND (amount >= ('-5000'::integer)::numeric) AND (amount <= (5000)::numeric))),
+  constraint uniform_adjustments_note_check CHECK ((length(TRIM(BOTH FROM note)) > 0)),
+  constraint uniform_adjustments_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE RESTRICT,
+  constraint uniform_adjustments_created_by_fkey FOREIGN KEY (created_by) REFERENCES profiles(id)
+);
+alter table public.uniform_adjustments enable row level security;
+
 -- Columns added after the tables were first created
 alter table public.profiles add column if not exists timeoff_approver boolean default false not null;
 -- Has comp time (only used by portals that give comp time to ticked people, e.g. the jail)
@@ -412,6 +454,8 @@ create index if not exists comp_adjustments_user_idx ON public.comp_adjustments 
 
 create index if not exists events_starts_idx ON public.events USING btree (starts_at);
 create index if not exists events_owner_idx ON public.events USING btree (owner_id);
+create index if not exists uniform_orders_user_idx ON public.uniform_orders USING btree (user_id, fy_start);
+create index if not exists uniform_adjustments_user_idx ON public.uniform_adjustments USING btree (user_id, fy_start);
 
 create index if not exists offduty_jobs_starts_idx ON public.offduty_jobs USING btree (starts_at);
 
@@ -1316,10 +1360,197 @@ begin
 end $function$
 ;
 
+-- ---------- uniform allowance ----------
+-- The yearly allowance per person. Change the amount here and re-run this file.
+CREATE OR REPLACE FUNCTION public.uniform_allowance()
+ RETURNS numeric
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select 500.00::numeric;
+$function$
+;
+
+-- The allowance year a date falls in, by its first day (allowance years start October 1)
+CREATE OR REPLACE FUNCTION public.uniform_fy_start(d date)
+ RETURNS date
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select case when extract(month from d) >= 10 then make_date(extract(year from d)::int, 10, 1)
+              else make_date(extract(year from d)::int - 1, 10, 1) end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.uniform_current_fy()
+ RETURNS date
+ LANGUAGE sql
+ STABLE
+AS $function$
+  select public.uniform_fy_start((now() at time zone 'America/Chicago')::date);
+$function$
+;
+
+-- One person's allowance for one year: adjustments, approved spending, pending requests
+-- (optionally leaving one order out of the sums)
+CREATE OR REPLACE FUNCTION public.uniform_sums(p_user uuid, p_fy date, p_exclude uuid DEFAULT NULL::uuid)
+ RETURNS TABLE(adjusted numeric, spent numeric, pending numeric)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select
+    coalesce((select sum(a.amount) from public.uniform_adjustments a where a.user_id = p_user and a.fy_start = p_fy), 0),
+    coalesce((select sum(o.approved_total) from public.uniform_orders o
+              where o.user_id = p_user and o.fy_start = p_fy and o.status = 'approved' and o.id is distinct from p_exclude), 0),
+    coalesce((select sum(o.total) from public.uniform_orders o
+              where o.user_id = p_user and o.fy_start = p_fy and o.status = 'pending' and o.id is distinct from p_exclude), 0);
+$function$
+;
+
+-- Balances for this allowance year: your own, or everyone's for managers
+CREATE OR REPLACE FUNCTION public.uniform_balances()
+ RETURNS TABLE(user_id uuid, full_name text, active boolean, fy_start date, allowance numeric, adjusted numeric, spent numeric, pending numeric, balance numeric)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select p.id, p.full_name, p.active, public.uniform_current_fy(), public.uniform_allowance(),
+         s.adjusted, s.spent, s.pending, public.uniform_allowance() + s.adjusted - s.spent
+  from public.profiles p
+  cross join lateral public.uniform_sums(p.id, public.uniform_current_fy()) s
+  where public.is_active() and (p.id = auth.uid() or public.is_manager())
+  order by p.full_name;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.uniform_orders_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  s record;
+  left_over numeric;
+  n int;
+begin
+  if auth.uid() is null then return new; end if;   -- dashboard / email function
+
+  if tg_op = 'INSERT' then
+    new.user_id := auth.uid();
+    new.status := 'pending';
+    new.fy_start := public.uniform_current_fy();
+    new.approved_total := null; new.manager_note := null; new.reviewed_by := null; new.reviewed_at := null;
+    new.ordered_at := null; new.received_at := null; new.approver_alerted_at := null;
+    new.created_at := now();
+    new.note := nullif(trim(coalesce(new.note, '')), '');
+
+    -- Item lines: tidy them up and work out the total here, never trusting the browser's math
+    if jsonb_typeof(new.items) is distinct from 'array' then raise exception 'Add at least one item.'; end if;
+    n := jsonb_array_length(new.items);
+    if n < 1 then raise exception 'Add at least one item.'; end if;
+    if n > 40 then raise exception 'That''s a lot of lines. Split it into more than one request.'; end if;
+    if exists (select 1 from jsonb_array_elements(new.items) x
+               where length(trim(coalesce(x->>'description', ''))) = 0
+                  or coalesce(x->>'qty', '') !~ '^[0-9]{1,2}$' or (x->>'qty')::int < 1
+                  or coalesce(x->>'price', '') !~ '^[0-9]{1,5}(\.[0-9]{1,2})?$') then
+      raise exception 'Each item needs a description, a quantity (1 to 99) and a price.';
+    end if;
+    new.items := (select jsonb_agg(jsonb_build_object(
+                    'item', left(trim(coalesce(x->>'item', '')), 300),
+                    'description', left(trim(x->>'description'), 200),
+                    'size', left(trim(coalesce(x->>'size', '')), 40),
+                    'qty', (x->>'qty')::int,
+                    'price', round((x->>'price')::numeric, 2)) order by i)
+                  from jsonb_array_elements(new.items) with ordinality as t(x, i));
+    new.total := (select sum((x->>'qty')::int * (x->>'price')::numeric) from jsonb_array_elements(new.items) x);
+    if new.total <= 0 then raise exception 'The total has to be more than $0.'; end if;
+
+    -- No request bigger than what's left (other pending requests count against it too)
+    select * into s from public.uniform_sums(new.user_id, new.fy_start);
+    left_over := public.uniform_allowance() + s.adjusted - s.spent - s.pending;
+    if new.total > left_over then
+      raise exception 'This request is $% but you only have $% left in your uniform allowance%.',
+        to_char(new.total, 'FM999990.00'), to_char(greatest(left_over, 0), 'FM999990.00'),
+        case when s.pending > 0 then ' (counting requests still waiting for approval)' else '' end;
+    end if;
+    return new;
+  end if;
+
+  -- The request itself never changes once it's sent
+  new.id := old.id; new.user_id := old.user_id; new.fy_start := old.fy_start; new.items := old.items;
+  new.total := old.total; new.note := old.note; new.created_at := old.created_at;
+  new.approver_alerted_at := old.approver_alerted_at;
+
+  if public.is_manager() and not public.is_timeoff_approver()
+     and new.status in ('approved', 'denied') and new.status is distinct from old.status then
+    raise exception 'Only the sheriff or chief deputy can approve or deny uniform orders.';
+  end if;
+
+  if public.is_timeoff_approver() then
+    -- Approve (deducting the amount, which can be corrected to the real invoice) or deny
+    if old.status = 'pending' and new.status in ('approved', 'denied') then
+      if new.status = 'approved' then
+        new.approved_total := round(coalesce(new.approved_total, old.total), 2);
+        if new.approved_total <= 0 then raise exception 'The approved amount has to be more than $0.'; end if;
+        select * into s from public.uniform_sums(old.user_id, old.fy_start, old.id);
+        left_over := public.uniform_allowance() + s.adjusted - s.spent;
+        if new.approved_total > left_over then
+          raise exception 'That''s more than the $% left in their allowance.', to_char(greatest(left_over, 0), 'FM999990.00');
+        end if;
+      else
+        new.approved_total := null;
+      end if;
+      new.reviewed_by := auth.uid(); new.reviewed_at := now();
+      new.ordered_at := null; new.received_at := null;
+      return new;
+    end if;
+    -- Keeping track of an approved order: placed with Galls, then received
+    if old.status = 'approved' and new.status = 'approved' then
+      new.approved_total := old.approved_total; new.reviewed_by := old.reviewed_by; new.reviewed_at := old.reviewed_at;
+      new.manager_note := old.manager_note;
+      new.ordered_at := case when new.ordered_at is null then null when old.ordered_at is null then now() else old.ordered_at end;
+      new.received_at := case when new.received_at is null then null when old.received_at is null then now() else old.received_at end;
+      if new.received_at is not null and new.ordered_at is null then new.ordered_at := new.received_at; end if;
+      return new;
+    end if;
+  end if;
+
+  -- Cancelling your own request before it's decided
+  if old.user_id = auth.uid() and old.status = 'pending' and new.status = 'cancelled' then
+    new.approved_total := null; new.manager_note := old.manager_note;
+    new.reviewed_by := old.reviewed_by; new.reviewed_at := old.reviewed_at;
+    new.ordered_at := null; new.received_at := null;
+    return new;
+  end if;
+
+  raise exception 'Not allowed.';
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.uniform_adjustments_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if auth.uid() is null then return new; end if;
+  new.created_by := auth.uid();
+  new.created_at := now();
+  new.fy_start := public.uniform_current_fy();
+  return new;
+end $function$
+;
+
 -- Functions in the public schema can be called by anyone through the API
 -- unless execute is revoked. These are only for use inside other functions.
 revoke execute on function public.patrol_month_facts(date) from public, anon, authenticated;
 revoke execute on function public.calendar_ticket(text, uuid) from public, anon;
+revoke execute on function public.uniform_sums(uuid, date, uuid) from public, anon, authenticated;
+revoke execute on function public.uniform_balances() from public, anon;
+grant execute on function public.uniform_balances() to authenticated;
 grant execute on function public.calendar_ticket(text, uuid) to authenticated;
 revoke execute on function public.export_db_setup() from public, anon;
 grant execute on function public.export_db_setup() to authenticated;
@@ -1403,6 +1634,18 @@ CREATE TRIGGER timesheets_guard BEFORE INSERT OR UPDATE ON public.timesheets FOR
 
 drop trigger if exists timesheet_drafts_touch on public.timesheet_drafts;
 CREATE TRIGGER timesheet_drafts_touch BEFORE INSERT OR UPDATE ON public.timesheet_drafts FOR EACH ROW EXECUTE FUNCTION public.timesheet_drafts_touch();
+
+drop trigger if exists uniform_orders_guard on public.uniform_orders;
+CREATE TRIGGER uniform_orders_guard BEFORE INSERT OR UPDATE ON public.uniform_orders FOR EACH ROW EXECUTE FUNCTION public.uniform_orders_guard();
+
+drop trigger if exists uniform_adjustments_guard on public.uniform_adjustments;
+CREATE TRIGGER uniform_adjustments_guard BEFORE INSERT ON public.uniform_adjustments FOR EACH ROW EXECUTE FUNCTION public.uniform_adjustments_guard();
+
+drop trigger if exists audit_uniform_orders on public.uniform_orders;
+CREATE TRIGGER audit_uniform_orders AFTER INSERT OR DELETE OR UPDATE ON public.uniform_orders FOR EACH ROW EXECUTE FUNCTION public.audit_trigger();
+
+drop trigger if exists audit_uniform_adjustments on public.uniform_adjustments;
+CREATE TRIGGER audit_uniform_adjustments AFTER INSERT OR DELETE OR UPDATE ON public.uniform_adjustments FOR EACH ROW EXECUTE FUNCTION public.audit_trigger();
 
 -- ---------------------------------------------------------------- security rules
 -- Row Level Security: who can see and change which rows.
@@ -1519,6 +1762,18 @@ drop policy if exists audit_log_select on public.audit_log;
 
 drop policy if exists timesheet_drafts_own on public.timesheet_drafts;
 create policy timesheet_drafts_own on public.timesheet_drafts as PERMISSIVE for ALL to authenticated using (((user_id = auth.uid()) AND is_active())) with check (((user_id = auth.uid()) AND is_active()));
+
+drop policy if exists uniform_orders_select on public.uniform_orders;
+create policy uniform_orders_select on public.uniform_orders as PERMISSIVE for SELECT to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
+drop policy if exists uniform_orders_insert on public.uniform_orders;
+create policy uniform_orders_insert on public.uniform_orders as PERMISSIVE for INSERT to authenticated with check (((user_id = auth.uid()) AND is_active()));
+drop policy if exists uniform_orders_update on public.uniform_orders;
+create policy uniform_orders_update on public.uniform_orders as PERMISSIVE for UPDATE to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
+
+drop policy if exists uniform_adjustments_select on public.uniform_adjustments;
+create policy uniform_adjustments_select on public.uniform_adjustments as PERMISSIVE for SELECT to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
+drop policy if exists uniform_adjustments_insert on public.uniform_adjustments;
+create policy uniform_adjustments_insert on public.uniform_adjustments as PERMISSIVE for INSERT to authenticated with check (is_manager());
 
 -- ---------------------------------------------------------------- existing logins
 -- Make sure every login has a profile (handle_new_user does this for new ones)

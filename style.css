@@ -221,6 +221,28 @@ table.extras td.num { text-align: left; padding-left: .9rem; }
 .to-sheet .sheet-sign { padding: 10px 12px; }
 .to-sheet .sig-meta { font-size: 11px; }
 .print-only { display: none; }
+/* uniform order form and printout */
+.uo-lines input { width: 100%; min-width: 0; }
+.uo-lines td { vertical-align: middle; }
+.uo-lines .uo-qty { max-width: 4.5rem; }
+.uo-lines .uo-price { max-width: 7rem; }
+.uo-total { margin: .6rem 0; }
+.uo-sheet .uo-items { width: 100%; border-collapse: collapse; font-size: 13px; }
+.uo-sheet .uo-items th, .uo-sheet .uo-items td { border-top: 1px solid #000; padding: 7px 8px; text-align: left; color: #000; background: none; text-transform: none; letter-spacing: 0; font-size: 13px; }
+.uo-sheet .uo-items .c { text-align: center; } .uo-sheet .uo-items .r { text-align: right; }
+.uo-sheet .uo-items a { color: #000; }
+ul.plain { margin: .3rem 0 0; padding-left: 1.1rem; }
+@media screen and (max-width: 760px) {
+  /* each item line stacks into a small card on phones */
+  .uo-lines thead { display: none; }
+  .uo-lines, .uo-lines tbody, .uo-lines tr, .uo-lines td { display: block; border: 0; }
+  .uo-lines tr { display: grid; grid-template-columns: 1fr 4.5rem 6.5rem; gap: .4rem; padding: .6rem 0; border-bottom: 1px solid var(--line); }
+  .uo-lines td { padding: 0; }
+  .uo-lines td.it, .uo-lines td.de { grid-column: 1 / -1; }
+  .uo-lines .uo-qty, .uo-lines .uo-price { max-width: none; }
+  .uo-lines td.uo-line { align-self: center; }
+  .uo-lines td:last-child { text-align: right; }
+}
 
 /* print: only the timesheet(s) in the open window */
 @page { size: letter; margin: 0.45in; }

@@ -17,7 +17,7 @@
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   // Which parts of the portal are on (FEATURES in config.js). Everything is on unless switched off,
   // e.g. the jail portal turns off case numbers, patrol stats and off-duty jobs.
-  const FEATURES = { cases: true, stats: true, offduty: true, comp: true, ...(cfg.FEATURES || {}) };
+  const FEATURES = { cases: true, stats: true, offduty: true, comp: true, uniforms: true, ...(cfg.FEATURES || {}) };
   const on = (f) => FEATURES[f] !== false;
   // Comp time: everyone (true), nobody (false), or only people ticked "Has comp time" on the Team tab ('ticked')
   const compPerPerson = FEATURES.comp === 'ticked';
@@ -472,6 +472,7 @@
 
   function renderShell() {
     const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off']];
+    if (on('uniforms')) tabs.push(['uniforms', 'Uniforms']);
     if (on('cases')) tabs.push(['cases', 'Case Numbers']);
     if (on('stats') && canSeeStats()) tabs.push(['stats', 'Stats']);
     if (on('offduty')) tabs.push(['offduty', 'Off-Duty Jobs']);
@@ -540,8 +541,9 @@
     if (!isManager() || !$('.tab-count')) return;
     const [ts, to] = await Promise.all([
       sb.from('timesheets').select('id', { count: 'exact', head: true }).eq('status', 'submitted'),
-      canApproveTimeOff() ? sb.from('time_off_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending') : { count: 0 }
-    ]);
+      canApproveTimeOff() ? sb.from('time_off_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending') : { count: 0 },
+      on('uniforms') && canApproveTimeOff() ? sb.from('uniform_orders').select('id', { count: 'exact', head: true }).eq('status', 'pending') : { count: 0 }
+    ]).then((r) => [r[0], { count: (r[1].count || 0) + (r[2].count || 0), error: r[1].error || r[2].error }]);
     if (ts.error || to.error) return;
     const n = (ts.count || 0) + (to.count || 0);
     $$('.tab-count').forEach((c) => { c.textContent = n; c.hidden = !n; });
@@ -1407,18 +1409,250 @@
     }
   }
 
+  /* ---------------- uniforms: yearly allowance for Galls orders ---------------- */
+  const money = (n) => Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  const fyLabel = (fy) => { const y = Number(String(fy || '').slice(0, 4)) || new Date().getFullYear(); return `Oct 1, ${y} – Sep 30, ${y + 1}`; };
+  async function uniformBalances() {
+    const { data, error } = await sb.rpc('uniform_balances');
+    if (error) throw error;
+    return data || [];
+  }
+  // Status shown for an order: approved ones move on to Ordered and Received
+  const uniformStatus = (o) => (o.status === 'approved' ? (o.received_at ? 'Received' : o.ordered_at ? 'Ordered' : 'Approved')
+    : o.status[0].toUpperCase() + o.status.slice(1));
+  const uniformBadge = (o) => `<span class="badge badge-${o.status === 'approved' ? 'approved' : o.status === 'pending' ? 'pending' : o.status === 'denied' ? 'denied' : 'cancelled'}">${esc(uniformStatus(o))}</span>`;
+  const uniformSummary = (o) => (o.items || []).map((x) => `${x.description}${x.qty > 1 ? ` ×${x.qty}` : ''}`).join(', ');
+  const uniformAmount = (o) => (o.status === 'approved' ? o.approved_total : o.total);
+
+  function uniformTable(list, mgr) {
+    if (!list.length) return '<p class="muted">Nothing here yet.</p>';
+    return `<div class="table-wrap"><table class="list">
+      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Requested</th><th>Items</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead>
+      <tbody>${list.map((o) => `<tr>
+        ${mgr ? `<td>${esc(personName(o.user_id, 'Unknown'))}</td>` : ''}
+        <td>${esc(fmtShort(isoDate(new Date(o.created_at))))}</td>
+        <td class="note">${esc(uniformSummary(o))}</td>
+        <td class="num">${money(uniformAmount(o))}</td>
+        <td>${uniformBadge(o)}</td>
+        <td class="right">${!mgr && o.status === 'pending' ? `<button class="btn small" data-uo-cancel="${o.id}">Cancel</button> ` : ''}<button class="btn small" data-uo="${o.id}">${mgr && o.status === 'pending' && canApproveTimeOff() ? 'Review' : 'View'}</button></td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+  function bindUniformButtons(el, list) {
+    $$('[data-uo]', el).forEach((b) => { b.onclick = () => openUniform(list.find((o) => o.id === b.dataset.uo)); });
+    $$('[data-uo-cancel]', el).forEach((b) => {
+      b.onclick = () => {
+        if (!confirm('Cancel this uniform request?')) return;
+        withBusy(b, async () => {
+          const { error } = await sb.from('uniform_orders').update({ status: 'cancelled' }).eq('id', b.dataset.uoCancel);
+          if (error) throw error;
+          toast('Request cancelled.');
+          showView(state.view);
+        });
+      };
+    });
+  }
+
+  // One order: a printable form (for placing the Galls order), plus approve / track controls
+  function uniformSheetHTML(o) {
+    const isLink = (t) => /^https?:\/\//i.test(t || '');
+    const rows = (o.items || []).map((x) => `<tr>
+      <td>${isLink(x.item) ? `<a href="${esc(x.item)}" target="_blank" rel="noopener">Galls link</a>` : esc(x.item || '')}</td>
+      <td>${esc(x.description)}</td><td>${esc(x.size || '')}</td><td class="c">${esc(x.qty)}</td>
+      <td class="r">${money(x.price)}</td><td class="r">${money(x.qty * x.price)}</td></tr>`).join('');
+    const decided = ['approved', 'denied'].includes(o.status) && o.reviewed_at;
+    const row = (label, value) => `<tr><th>${esc(label)}</th><td>${value}</td></tr>`;
+    return `<div class="sheet to-sheet uo-sheet">
+      <div class="sheet-head">
+        <div class="org">${esc(ORG)}</div>
+        <div class="title">UNIFORM / EQUIPMENT ORDER</div>
+        <div class="emp">${esc(personName(o.user_id, 'Employee').toUpperCase())}</div>
+      </div>
+      <table class="uo-items"><thead><tr><th>Galls item #</th><th>Description</th><th>Size</th><th class="c">Qty</th><th class="r">Price</th><th class="r">Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><th colspan="5" class="r">Requested total</th><th class="r">${money(o.total)}</th></tr>
+          ${o.status === 'approved' && Number(o.approved_total) !== Number(o.total) ? `<tr><th colspan="5" class="r">Approved amount</th><th class="r">${money(o.approved_total)}</th></tr>` : ''}</tfoot>
+      </table>
+      <table class="to-table"><tbody>
+        ${o.note ? row('Note', esc(o.note)) : ''}
+        ${row('Requested', esc(fmtDateTime(o.created_at)))}
+        ${row('Status', esc(uniformStatus(o)))}
+        ${decided ? row(o.status === 'approved' ? 'Approved by' : 'Denied by', `${esc(personName(o.reviewed_by, 'Manager'))} on ${esc(fmtDateTime(o.reviewed_at))}`) : ''}
+        ${o.ordered_at ? row('Ordered', esc(fmtDateTime(o.ordered_at))) : ''}
+        ${o.received_at ? row('Received', esc(fmtDateTime(o.received_at))) : ''}
+        ${o.manager_note ? row('Manager note', esc(o.manager_note)) : ''}
+        ${row('Allowance year', esc(fyLabel(o.fy_start)))}
+      </tbody></table>
+    </div>
+    <div class="sheet-after">Printed ${esc(new Date().toLocaleString())}</div>`;
+  }
+
+  function openUniform(o) {
+    const approver = canApproveTimeOff();
+    openModal(`
+      <div class="print-area"><div class="sheet-page">${uniformSheetHTML(o)}</div></div>
+      ${o.status === 'pending' && approver ? `<div class="review no-print">
+        <div class="row"><label class="narrow">Amount to take out<input type="number" id="uo-approved" min="0.01" step="0.01" value="${esc(Number(o.total).toFixed(2))}" inputmode="decimal"></label>
+          <p class="hint" id="uo-bal" style="align-self:end">Checking their balance…</p></div>
+        <label>Note to employee (optional)<textarea id="rv-note" rows="2"></textarea></label>
+        <div class="actions"><button class="btn primary" id="rv-approve">Approve</button><button class="btn danger" id="rv-deny">Deny</button></div></div>` : ''}
+      ${o.status === 'pending' && isManager() && !approver ? `<p class="notice no-print">Waiting on ${esc(approverNames())} to approve or deny.</p>` : ''}
+      ${o.status === 'approved' && approver ? `<div class="actions no-print">
+        <button class="btn" id="uo-ordered">${o.ordered_at ? 'Undo “ordered”' : 'Mark ordered from Galls'}</button>
+        ${o.ordered_at ? `<button class="btn" id="uo-received">${o.received_at ? 'Undo “received”' : 'Mark received'}</button>` : ''}</div>` : ''}
+      <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button></div>`);
+    $('#print-btn').onclick = () => window.print();
+    if (o.status === 'pending' && approver) {
+      uniformBalances().then((list) => {
+        const b = list.find((x) => x.user_id === o.user_id), cell = $('#uo-bal');
+        if (cell && b) cell.textContent = `${money(b.balance)} left in their allowance (this request isn’t taken out yet).`;
+      }).catch(() => {});
+      const act = (status, btn) => withBusy(btn, async () => {
+        const upd = { status, manager_note: $('#rv-note').value.trim() || null };
+        if (status === 'approved') {
+          const amt = Number($('#uo-approved').value);
+          if (!(amt > 0)) throw new Error('Enter the amount to take out of their allowance.');
+          upd.approved_total = Math.round(amt * 100) / 100;
+        }
+        const { error } = await sb.from('uniform_orders').update(upd).eq('id', o.id);
+        if (error) throw error;
+        notify('uniform_decision', o.id);
+        closeModal();
+        toast(status === 'approved' ? 'Approved and taken out of their allowance.' : 'Denied.');
+        showView(state.view);
+      });
+      $('#rv-approve').onclick = (e) => act('approved', e.target);
+      $('#rv-deny').onclick = (e) => act('denied', e.target);
+    }
+    const track = (field, btn) => withBusy(btn, async () => {
+      const upd = { [field]: o[field] ? null : new Date().toISOString() };
+      if (field === 'ordered_at' && o.ordered_at) upd.received_at = null;   // undoing "ordered" undoes "received" too
+      const { error } = await sb.from('uniform_orders').update(upd).eq('id', o.id);
+      if (error) throw error;
+      closeModal();
+      toast('Saved.');
+      showView(state.view);
+    });
+    $('#uo-ordered')?.addEventListener('click', (e) => track('ordered_at', e.target));
+    $('#uo-received')?.addEventListener('click', (e) => track('received_at', e.target));
+  }
+
+  views.uniforms = async (el) => {
+    const [bals, ordersR, adjR] = await Promise.all([
+      uniformBalances(),
+      sb.from('uniform_orders').select('*').eq('user_id', me()).order('created_at', { ascending: false }),
+      sb.from('uniform_adjustments').select('*').eq('user_id', me()).order('created_at', { ascending: false }),
+      isManager() ? null : loadDirectory().catch(() => [])   // names of who approved, for printouts
+    ]);
+    if (ordersR.error) throw ordersR.error;
+    const b = bals.find((x) => x.user_id === me()) || { allowance: 500, balance: 500, pending: 0, spent: 0, adjusted: 0 };
+    const fy = b.fy_start;
+    const available = Math.max(0, Number(b.balance) - Number(b.pending));
+    const adjThisYear = (adjR.data || []).filter((a) => a.fy_start === fy);
+    const lineRow = () => `<tr>
+      <td class="it"><input class="uo-item" placeholder="Galls item # or link" maxlength="300"></td>
+      <td class="de"><input class="uo-desc" placeholder="Description (e.g. Duty pants)" maxlength="200"></td>
+      <td><input class="uo-size" placeholder="Size" maxlength="40"></td>
+      <td><input class="uo-qty" type="number" min="1" max="99" step="1" value="1" inputmode="numeric" aria-label="Quantity"></td>
+      <td><input class="uo-price" type="number" min="0" step="0.01" placeholder="Price each" inputmode="decimal" aria-label="Price each"></td>
+      <td class="num uo-line"></td>
+      <td><button type="button" class="btn-link uo-del" aria-label="Remove this item">✕</button></td></tr>`;
+
+    el.innerHTML = `
+      <section class="card comp-card">
+        <h2>Uniform allowance</h2>
+        <div class="comp-balance"><span class="comp-num">${money(b.balance)}</span> left of ${money(b.allowance)}</div>
+        <div class="hint" style="margin:0">For ${esc(fyLabel(fy))}. Resets every October 1.${Number(b.pending) ? ` ${money(b.pending)} is waiting for approval, so you can request up to ${money(available)} more.` : ''}</div>
+        ${adjThisYear.length ? `<details class="fold"><summary><h3>Adjustments</h3></summary>
+          <ul class="plain">${adjThisYear.map((a) => `<li>${Number(a.amount) > 0 ? '+' : '−'}${money(Math.abs(a.amount))} — ${esc(a.note)}</li>`).join('')}</ul></details>` : ''}
+      </section>
+      <section class="card">
+        <h2>Request uniforms or equipment</h2>
+        <p class="hint">List what you want from Galls, one line per item. The sheriff or chief deputy approves it and it comes out of your allowance.</p>
+        <form id="uo-form" autocomplete="off">
+          <div class="table-wrap"><table class="grid uo-lines">
+            <thead><tr><th>Galls item # or link</th><th>Description</th><th>Size</th><th>Qty</th><th>Price each</th><th class="num">Total</th><th></th></tr></thead>
+            <tbody id="uo-rows">${lineRow()}</tbody>
+          </table></div>
+          <button type="button" class="btn small" id="uo-add">+ Add another item</button>
+          <p class="uo-total">Total: <strong id="uo-total">${money(0)}</strong> <span class="hint" id="uo-left">You have ${money(available)} available.</span></p>
+          <label>Note (optional)<textarea name="note" rows="2" maxlength="1000"></textarea></label>
+          <button class="btn primary" type="submit" id="uo-submit">Submit request</button>
+        </form>
+      </section>
+      <section class="card"><h2>My requests</h2><div id="uo-mine">${uniformTable(ordersR.data, false)}</div></section>`;
+
+    bindUniformButtons($('#uo-mine'), ordersR.data);
+    const f = $('#uo-form');
+    const readLines = () => $$('#uo-rows tr').map((tr) => ({
+      item: $('.uo-item', tr).value.trim(), description: $('.uo-desc', tr).value.trim(), size: $('.uo-size', tr).value.trim(),
+      qty: Number($('.uo-qty', tr).value), price: $('.uo-price', tr).value === '' ? null : Number($('.uo-price', tr).value)
+    }));
+    const recalc = () => {
+      let total = 0;
+      $$('#uo-rows tr').forEach((tr) => {
+        const q = Number($('.uo-qty', tr).value) || 0, pr = Number($('.uo-price', tr).value) || 0;
+        $('.uo-line', tr).textContent = q && pr ? money(q * pr) : '';
+        total += q * pr;
+      });
+      total = Math.round(total * 100) / 100;
+      $('#uo-total').textContent = money(total);
+      const over = total > available + 0.004;
+      const left = $('#uo-left');
+      left.textContent = over ? `That’s ${money(total - available)} more than the ${money(available)} you have available.` : `${money(available - total)} left after this.`;
+      left.classList.toggle('error-text', over);
+      $('#uo-submit').disabled = over;
+    };
+    f.addEventListener('input', recalc);
+    $('#uo-add').onclick = () => { $('#uo-rows').insertAdjacentHTML('beforeend', lineRow()); $('#uo-rows tr:last-child .uo-item').focus(); };
+    $('#uo-rows').addEventListener('click', (e) => {
+      if (!e.target.closest('.uo-del')) return;
+      if ($$('#uo-rows tr').length > 1) e.target.closest('tr').remove(); else $$('input', e.target.closest('tr')).forEach((i) => { i.value = i.classList.contains('uo-qty') ? 1 : ''; });
+      recalc();
+    });
+    f.onsubmit = (e) => {
+      e.preventDefault();
+      withBusy($('#uo-submit'), async () => {
+        const items = readLines().filter((x) => x.item || x.description || x.size || x.price != null);
+        if (!items.length) throw new Error('Add at least one item.');
+        for (const x of items) {
+          if (!x.description) throw new Error('Each item needs a description.');
+          if (!(x.qty >= 1 && x.qty <= 99 && Number.isInteger(x.qty))) throw new Error(`Check the quantity for “${x.description}” (1 to 99).`);
+          if (!(x.price > 0)) throw new Error(`Enter the price for “${x.description}”.`);
+        }
+        const { data: o, error } = await sb.from('uniform_orders').insert({
+          items: items.map((x) => ({ ...x, price: x.price.toFixed(2) })), note: f.note.value.trim() || null
+        }).select('id').single();
+        if (error) throw error;
+        notifyQuiet('uniform_request', o.id);
+        toast('Request sent for approval.');
+        showView('uniforms');
+      });
+    };
+    recalc();
+  };
+
+  // Email alert that shouldn't bother the person if it fails (the request is saved either way)
+  async function notifyQuiet(type, id) {
+    try {
+      const { data, error } = await sb.functions.invoke('notify', { body: { type, id } });
+      if (error) throw new Error(await functionError(error, 'notify'));
+      if (data?.error) throw new Error(data.error);
+    } catch (err) { console.warn('Email alert not sent:', err.message); }
+  }
+
   /* ---------------- manager: approvals (only what's waiting) ---------------- */
   views.review = async (el) => {
     const people = await loadPeople();
     // Who still owes a timesheet: last pay period (once it's over), and the current one on its last day
     const cur = currentPeriod(), prev = previousPeriod(), today = isoDate(new Date());
     const due = [...(prev !== cur ? [prev] : []), ...(periodEnd(cur) === today ? [cur] : [])];
-    const [ts, to, dueTs] = await Promise.all([
+    const [ts, to, dueTs, uo] = await Promise.all([
       sb.from('timesheets').select('*').eq('status', 'submitted').order('period_start'),
       sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date'),
-      due.length ? sb.from('timesheets').select('user_id, period_start, status').in('period_start', due) : { data: [] }
+      due.length ? sb.from('timesheets').select('user_id, period_start, status').in('period_start', due) : { data: [] },
+      on('uniforms') ? sb.from('uniform_orders').select('*').eq('status', 'pending').order('created_at') : { data: [] }
     ]);
-    for (const r of [ts, to, dueTs]) if (r.error) throw r.error;
+    for (const r of [ts, to, dueTs, uo]) if (r.error) throw r.error;
     const missing = due.map((p) => {
       const status = Object.fromEntries(dueTs.data.filter((t) => t.period_start === p).map((t) => [t.user_id, t.status]));
       const joinedBy = (x) => !x.created_at || isoDate(new Date(x.created_at)) <= periodEnd(p);   // not people who started after it
@@ -1438,9 +1672,12 @@
       <section class="card"><h2>Time off awaiting approval <span class="count">${to.data.length}</span></h2>
         ${timeOffApprovers().length ? `<p class="hint">Approved or denied by ${esc(approverNames())}.</p>` : ''}
         <div id="to-pending">${to.data.length ? timeOffTable(to.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>
-      <p class="hint">Approved and denied history, comp time balances and payroll are on <button class="btn-link" type="button" id="go-payroll">Payroll &amp; History</button>.</p>`;
+      ${on('uniforms') ? `<section class="card"><h2>Uniform orders awaiting approval <span class="count">${uo.data.length}</span></h2>
+        <div id="uo-pending">${uo.data.length ? uniformTable(uo.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>` : ''}
+      <p class="hint">Approved and denied history, comp time${on('uniforms') ? ' and uniform allowance' : ''} balances and payroll are on <button class="btn-link" type="button" id="go-payroll">Payroll &amp; History</button>.</p>`;
     bindTimesheetButtons($('#ts-pending'), ts.data);
     bindTimeOffButtons($('#to-pending'), to.data);
+    if ($('#uo-pending')) bindUniformButtons($('#uo-pending'), uo.data);
     $('#go-payroll').onclick = () => showView('payroll');
   };
 
@@ -1452,12 +1689,17 @@
     // When a person is picked, show only them and their full history
     const q = (table) => { let x = sb.from(table).select('*'); if (who) x = x.eq('user_id', who); return x; };
     const recent = (x) => who ? x : x.limit(25);
-    const [tsDone, toDone, bals] = await Promise.all([
+    const [tsDone, toDone, bals, uBals, uOpen, uDone] = await Promise.all([
       recent(q('timesheets').neq('status', 'submitted').order('period_start', { ascending: false })),
       recent(q('time_off_requests').neq('status', 'pending').order('start_date', { ascending: false })),
-      compBalances()
+      compBalances(),
+      on('uniforms') ? uniformBalances() : [],
+      // approved orders still to place with Galls or still to arrive
+      on('uniforms') ? q('uniform_orders').eq('status', 'approved').is('received_at', null).order('reviewed_at') : { data: [] },
+      on('uniforms') ? recent(q('uniform_orders').neq('status', 'pending').order('created_at', { ascending: false })) : { data: [] }
     ]);
-    for (const r of [tsDone, toDone]) if (r.error) throw r.error;
+    for (const r of [tsDone, toDone, uOpen, uDone]) if (r.error) throw r.error;
+    const uRows = uBals.filter((b) => (who ? b.user_id === who : b.active !== false));
     const compRows = bals.filter((b) => (who ? b.user_id === who : b.active !== false) && (!compPerPerson || state.people[b.user_id]?.comp_time));
     const forWho = who ? ` — ${esc(personName(who))}` : '';
 
@@ -1487,6 +1729,24 @@
           <button class="btn small" id="comp-csv" type="button">Download CSV</button>
         </details>
       </section>` : ''}
+      ${on('uniforms') ? `<section class="card">
+        <details class="fold" ${who ? 'open' : ''}>
+          <summary><h2>Uniform allowance${forWho}</h2></summary>
+          <p class="muted">${esc(fyLabel(uBals[0]?.fy_start))}. Everyone gets ${money(uBals[0]?.allowance ?? 500)}, reset every October 1. Use <strong>Adjust</strong> to enter what someone already spent on paper this year, or to fix a mistake.</p>
+          <div class="table-wrap"><table class="list">
+            <thead><tr><th>Name</th><th class="num">Left</th><th class="num">Spent</th><th class="num">Waiting</th><th class="num">Adjusted</th><th></th></tr></thead>
+            <tbody>${uRows.map((b) => `<tr data-id="${b.user_id}"><td>${esc(b.full_name || personName(b.user_id))}</td>
+              <td class="num"><strong>${money(b.balance)}</strong></td><td class="num">${money(b.spent)}</td>
+              <td class="num">${Number(b.pending) ? money(b.pending) : '—'}</td><td class="num">${Number(b.adjusted) ? money(b.adjusted) : '—'}</td>
+              <td class="right"><button class="btn small uo-adj">Adjust</button></td></tr>`).join('')}</tbody>
+          </table></div>
+          <button class="btn small" id="uo-csv" type="button">Download CSV</button>
+        </details>
+        <h3 style="margin-top:1rem">Approved orders to place or receive${forWho}</h3>
+        <div id="uo-open">${uniformTable(uOpen.data, true)}</div>
+        <details class="fold"><summary><h3>${who ? 'All uniform orders' : 'Recent uniform orders'}${forWho}</h3></summary>
+          <div id="uo-done">${uniformTable(uDone.data, true)}</div></details>
+      </section>` : ''}
       <section class="card"><h2>Payroll: print or export a pay period${forWho}</h2>
         <form id="exp" class="row end">
           <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
@@ -1506,6 +1766,45 @@
     bindTimesheetButtons($('#ts-done'), tsDone.data);
     bindTimeOffButtons($('#to-done'), toDone.data);
 
+    if (on('uniforms')) {
+      bindUniformButtons($('#uo-open'), uOpen.data);
+      bindUniformButtons($('#uo-done'), uDone.data);
+      $('#uo-csv').onclick = () => downloadCSV(`uniform-allowance-${localToday()}.csv`, [
+        ['Name', 'Allowance year starts', 'Allowance', 'Adjusted', 'Spent (approved)', 'Waiting for approval', 'Left'],
+        ...uRows.map((b) => [b.full_name, b.fy_start, Number(b.allowance), Number(b.adjusted), Number(b.spent), Number(b.pending), Number(b.balance)])
+      ]);
+      $$('.uo-adj', el).forEach((btn) => {
+        btn.onclick = () => {
+          const b = uRows.find((x) => x.user_id === btn.closest('tr').dataset.id);
+          openModal(`
+            <h2 class="modal-head">Adjust uniform allowance — ${esc(b.full_name)}</h2>
+            <p>Left this year: <strong>${money(b.balance)}</strong></p>
+            <form id="uadj-form" autocomplete="off">
+              <div class="row">
+                <label class="narrow">Amount<input type="number" name="amount" step="0.01" inputmode="decimal" required placeholder="e.g. -120 or 50"></label>
+                <label class="grow">Note<input name="note" required placeholder="e.g. Spent on paper in October"></label>
+              </div>
+              <p class="hint" id="uadj-hint">Negative takes money away (already spent), positive adds it. Adjustments can’t be edited or deleted — fix a mistake with another adjustment.</p>
+              <div class="actions"><button class="btn primary" type="submit">Save adjustment</button><button class="btn" type="button" id="uadj-cancel">Cancel</button></div>
+            </form>`);
+          const af = $('#uadj-form');
+          af.amount.oninput = () => { const a = Number(af.amount.value) || 0; $('#uadj-hint').textContent = a ? `They’ll have ${money(Number(b.balance) + a)} left.` : 'Negative takes money away (already spent), positive adds it.'; };
+          $('#uadj-cancel').onclick = closeModal;
+          af.onsubmit = (ev) => {
+            ev.preventDefault();
+            const amount = Math.round(Number(af.amount.value) * 100) / 100;
+            withBusy(af.querySelector('[type=submit]'), async () => {
+              if (!amount) throw new Error('Enter an amount that isn’t 0 (for example -120 or 50).');
+              const { error } = await sb.from('uniform_adjustments').insert({ user_id: b.user_id, amount, note: af.note.value.trim() });
+              if (error) throw error;
+              closeModal();
+              toast('Allowance adjusted.');
+              showView('payroll');
+            });
+          };
+        };
+      });
+    }
     if ($('#comp-csv')) $('#comp-csv').onclick = () => downloadCSV(`comp-balances-${localToday()}.csv`, [
       ['Name', 'Balance', 'Earned (approved)', 'Used (approved)', 'Adjustments', 'Pending earned', 'Pending used'],
       ...compRows.map((b) => [b.full_name, Number(b.balance), Number(b.earned), Number(b.used), Number(b.adjusted), Number(b.pending_earned), Number(b.pending_used)])

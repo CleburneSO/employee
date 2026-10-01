@@ -182,6 +182,36 @@ Deno.serve(async (req) => {
       html = page(SITE, `Your time-off request was ${r.status}`, [
         `<strong>${esc(range)}</strong> (${esc(r.type)})`, r.manager_note ? `Note: “${esc(r.manager_note)}”` : ''
       ]);
+    } else if (type === 'uniform_request' || type === 'uniform_decision') {
+      const money = (n) => Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+      const itemRows = (o) => `<table cellpadding="4" style="border-collapse:collapse;font-size:14px;margin:4px 0 10px">${(o.items || []).map((x) =>
+        `<tr><td>${esc(x.qty)} ×</td><td>${esc(x.description)}${x.size ? ` (${esc(x.size)})` : ''}${x.item ? `<br><span style="color:#6b7383;font-size:12px">${esc(x.item)}</span>` : ''}</td><td align="right">${money(x.qty * x.price)}</td></tr>`).join('')}</table>`;
+      if (type === 'uniform_request') {
+        // Only the person who asked, only while pending, and only once
+        const { data: o } = await db.from('uniform_orders').update({ approver_alerted_at: new Date().toISOString() })
+          .eq('id', id).eq('user_id', me.id).eq('status', 'pending').is('approver_alerted_at', null).select('*').maybeSingle();
+        if (!o) return json({ ok: true, sent: 0 });
+        unclaim = () => db.from('uniform_orders').update({ approver_alerted_at: null }).eq('id', id);
+        to = await approvers();
+        subject = `Uniform order to approve: ${me.full_name} — ${money(o.total)}`;
+        html = page(SITE, 'New uniform / equipment request', [
+          `<strong>${esc(me.full_name)}</strong> requested <strong>${money(o.total)}</strong> from their uniform allowance.`,
+          itemRows(o), o.note ? `Note: “${esc(o.note)}”` : '',
+          'Approve or deny it on the Approvals tab.'
+        ], 'Review it');
+      } else {
+        mgrOnly();
+        const { data: o } = await db.from('uniform_orders').select('*').eq('id', id).single();
+        if (!o || !['approved', 'denied'].includes(o.status)) return json({ ok: true, sent: 0 });
+        to = await people([o.user_id]);
+        const ok = o.status === 'approved';
+        subject = ok ? `Uniform order approved: ${money(o.approved_total)}` : 'Uniform order denied';
+        html = page(SITE, ok ? 'Your uniform order was approved' : 'Your uniform order was denied', [
+          ok ? `<strong>${money(o.approved_total)}</strong> was taken out of your uniform allowance${Number(o.approved_total) !== Number(o.total) ? ` (you requested ${money(o.total)})` : ''}.` : 'Nothing was taken out of your allowance.',
+          itemRows(o), o.manager_note ? `Note: “${esc(o.manager_note)}”` : '',
+          'See your balance on the Uniforms tab.'
+        ], 'Open the Uniforms tab');
+      }
     } else if (type === 'timesheet_returned') {
       mgrOnly();
       const { data: t } = await db.from('timesheets').select('*').eq('id', id).single();
