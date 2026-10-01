@@ -317,6 +317,19 @@ create table if not exists public.timesheets (
 );
 alter table public.timesheets enable row level security;
 
+-- Unfinished timesheets, saved as the employee types. Only they can see their own.
+-- Deleted when they sign and submit. The signature is never saved here.
+create table if not exists public.timesheet_drafts (
+  user_id uuid default auth.uid() not null,
+  period_start date not null,
+  data jsonb default '{}'::jsonb not null,
+  updated_at timestamp with time zone default now() not null,
+  constraint timesheet_drafts_pkey PRIMARY KEY (user_id, period_start),
+  constraint timesheet_drafts_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE,
+  constraint timesheet_drafts_size_check CHECK ((octet_length((data)::text) < 200000))
+);
+alter table public.timesheet_drafts enable row level security;
+
 -- ---------------------------------------------------------------- indexes
 
 create index if not exists audit_log_actor_idx ON public.audit_log USING btree (actor, at DESC);
@@ -1146,6 +1159,16 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.timesheet_drafts_touch()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  new.updated_at := now();   -- server time, so it compares with signed_at
+  return new;
+end $function$
+;
+
 -- Functions in the public schema can be called by anyone through the API
 -- unless execute is revoked. These are only for use inside other functions.
 revoke execute on function public.patrol_month_facts(date) from public, anon, authenticated;
@@ -1225,6 +1248,9 @@ CREATE TRIGGER time_off_guard BEFORE INSERT OR UPDATE ON public.time_off_request
 
 drop trigger if exists timesheets_guard on public.timesheets;
 CREATE TRIGGER timesheets_guard BEFORE INSERT OR UPDATE ON public.timesheets FOR EACH ROW EXECUTE FUNCTION public.timesheets_guard();
+
+drop trigger if exists timesheet_drafts_touch on public.timesheet_drafts;
+CREATE TRIGGER timesheet_drafts_touch BEFORE INSERT OR UPDATE ON public.timesheet_drafts FOR EACH ROW EXECUTE FUNCTION public.timesheet_drafts_touch();
 
 -- ---------------------------------------------------------------- security rules
 -- Row Level Security: who can see and change which rows.
@@ -1335,6 +1361,9 @@ drop policy if exists timesheets_update on public.timesheets;
 create policy timesheets_update on public.timesheets as PERMISSIVE for UPDATE to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
 
 drop policy if exists audit_log_select on public.audit_log;
+
+drop policy if exists timesheet_drafts_own on public.timesheet_drafts;
+create policy timesheet_drafts_own on public.timesheet_drafts as PERMISSIVE for ALL to authenticated using (((user_id = auth.uid()) AND is_active())) with check (((user_id = auth.uid()) AND is_active()));
 
 -- ---------------------------------------------------------------- existing logins
 -- Make sure every login has a profile (handle_new_user does this for new ones)

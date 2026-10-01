@@ -235,7 +235,7 @@
     if (!w) {
       document.body.insertAdjacentHTML('beforeend', `<div id="idle-warn" class="idle-warn" role="alertdialog" aria-live="assertive">
         <div class="idle-box"><strong>Still there?</strong>
-        <p>For security, you’ll be signed out in <span id="idle-left"></span> because of inactivity. Anything you haven’t submitted will be lost.</p>
+        <p>For security, you’ll be signed out in <span id="idle-left"></span> because of inactivity. Timesheets are saved as drafts; anything else you haven’t saved will be lost.</p>
         <button class="btn primary" id="idle-stay">Stay signed in</button></div></div>`);
       w = $('#idle-warn');
       $('#idle-stay').onclick = () => { lastLocal = Date.now(); storeActivity(lastLocal); hideIdleWarning(); };
@@ -499,7 +499,11 @@
   document.addEventListener('click', (e) => { if (!e.target.closest('.tabs-wrap')) setMenuOpen(false); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenuOpen(false); });
 
+  // Save any timesheet draft that's waiting when the page is hidden or closed
+  document.addEventListener('visibilitychange', () => { if (document.hidden) state.flushDraft?.(); });
+
   async function showView(v) {
+    state.flushDraft?.();
     state.view = v;
     $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
     const cur = $('.menu-current');
@@ -649,10 +653,11 @@
 
   const TS_RECENT = 4;   // how many past timesheets to list before "Show all"
   views.timesheets = async (el) => {
-    const [{ data: mine, error }, , assigned] = await Promise.all([
+    const [{ data: mine, error }, , assigned, dr] = await Promise.all([
       sb.from('timesheets').select('*').eq('user_id', me()).order('period_start', { ascending: false }),
       loadDuties(),
-      loadAssignments(me())
+      loadAssignments(me()),
+      sb.from('timesheet_drafts').select('period_start, data, updated_at')
     ]);
     if (error) throw error;
     const myIds = new Set(assigned.map((a) => a.duty_id));
@@ -676,6 +681,7 @@
           <div class="usual-bar" id="ts-usual"><span class="usual-label">My usual hours</span>${usualPicker(state.profile.usual_in, state.profile.usual_out)}
             <span class="hint" id="ts-usual-hint">${hasUsual() ? 'Pick <strong>★</strong> at the top of a day’s Time in list to fill in your usual shift.' : 'Set these and your shift shows at the top of each day’s Time in list.'}</span></div>
           <div id="ts-status" class="notice hidden"></div>
+          <div id="ts-draft-note" class="notice hidden"></div>
           <div id="ts-holiday" class="notice holiday-note hidden"></div>
           <div class="table-wrap"><table class="grid entry">
             <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
@@ -711,7 +717,8 @@
             <label class="check"><input type="checkbox" id="ts-agree">
               <span>I agree the time reported is accurate and true, and that my electronic signature is the legal equivalent of my handwritten signature.</span></label>
           </fieldset>
-          <button class="btn primary" type="submit" id="ts-submit">Sign &amp; submit</button>
+          <div class="row submit-row"><button class="btn primary" type="submit" id="ts-submit">Sign &amp; submit</button>
+            <span class="hint" id="ts-draft" aria-live="polite"></span></div>
         </form>
       </section>
       <section class="card"><h2>My timesheets <span class="count muted-count">${mine.length}</span></h2>
@@ -742,7 +749,9 @@
     };
     $('#ts-rows').addEventListener('input', applyUsual);
     $('#ts-rows').addEventListener('change', applyUsual);
-    $('#ts-form').addEventListener('input', (e) => { if (!e.target.closest('.sign') && !e.target.closest('#ts-usual')) recalc(); });
+    const isTimeField = (t) => !t.closest('.sign') && !t.closest('#ts-usual') && t.id !== 'ts-period';
+    $('#ts-form').addEventListener('input', (e) => { if (isTimeField(e.target)) { recalc(); queueDraft(); } });
+    $('#ts-form').addEventListener('change', (e) => { if (isTimeField(e.target)) queueDraft(); });
     bindUsualPicker($('#ts-usual'), async () => {
       try {
         const u = readUsualPicker($('#ts-usual'));
@@ -767,14 +776,59 @@
         prev.insertAdjacentHTML('afterend', segRow(iso, { in: $('.t-out', prev).value || '' }, false));
         prev.nextElementSibling.querySelector('.t-out').focus();
         recalc();
+        queueDraft();
       } else if (del) {
         del.closest('tr').remove();
         recalc();
+        queueDraft();
       }
     });
 
     const periodInput = $('#ts-period');
     let existing = null;
+
+    // Drafts: the form is saved as you type (not the signature), so nothing is lost if you're
+    // signed out, close the page or switch devices. Deleted once the timesheet is submitted.
+    const drafts = {};
+    if (!dr.error) dr.data.forEach((r) => { drafts[r.period_start] = r; });   // no drafts table yet: carry on without
+    let draftTimer = null, draftPeriod = null, draftSaving = Promise.resolve();
+    const readDraft = () => ({
+      entries: $$('#ts-rows tr').map((tr) => ({
+        date: tr.dataset.date, in: $('.t-in', tr).value, out: $('.t-out', tr).value,
+        explanation: $('.t-expl', tr).value, duty_id: $('.t-type', tr)?.value || ''
+      })).filter((x) => x.in || x.out || x.explanation.trim() || x.duty_id),
+      extras: Object.fromEntries(EXTRA_HOURS.map(([k]) => [k, $(`#x-${k}`).value])),
+      duties: Object.fromEntries($$('.duty-input').map((i) => [i.dataset.duty, i.value]))
+    });
+    const draftState = (t) => { const x = $('#ts-draft'); if (x) x.textContent = t; };
+    function queueDraft() {
+      draftPeriod = periodInput.value;
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(flushDraft, 1200);
+      draftState('Saving draft…');
+    }
+    function flushDraft() {
+      clearTimeout(draftTimer);
+      const p = draftPeriod;
+      if (!p || !$('#ts-form')) return;
+      draftPeriod = null;
+      const data = readDraft();
+      draftSaving = (async () => {
+        const { data: row, error: err } = await sb.from('timesheet_drafts')
+          .upsert({ user_id: me(), period_start: p, data }).select('period_start, data, updated_at').single();
+        if (err) { draftState(''); return; }   // a draft is a convenience: never get in the way of the form
+        drafts[p] = row;
+        if (periodInput.value === p) draftState(`Draft saved ${fmtTime(row.updated_at)}`);
+      })();
+    }
+    async function discardDraft(p) {
+      clearTimeout(draftTimer);
+      if (draftPeriod === p) draftPeriod = null;
+      await draftSaving;
+      delete drafts[p];
+      await sb.from('timesheet_drafts').delete().eq('user_id', me()).eq('period_start', p);
+    }
+    state.flushDraft = flushDraft;
 
     const loadPeriod = () => {
       const p = periodInput.value;
@@ -815,10 +869,31 @@
         const v = existing ? Number(saved?.hours) || 0 : Number(d.default_hours) || 0;  // new sheet: pre-fill automatic hours
         $(`#d-${d.id}`).value = v ? v : '';
       });
+      // An unsubmitted draft newer than what was signed takes over the form
+      const draft = drafts[p], draftNote = $('#ts-draft-note');
+      draftNote.className = 'notice hidden';
+      draftState('');
+      if (draft && (existing?.status === 'approved' || (existing && new Date(draft.updated_at) <= new Date(existing.signed_at)))) {
+        discardDraft(p);   // already signed or locked since it was saved
+      } else if (draft) {
+        const d = draft.data || {};
+        buildRows(p, d.entries || []);
+        EXTRA_HOURS.forEach(([k]) => { $(`#x-${k}`).value = d.extras?.[k] ?? ''; });
+        $$('.duty-input').forEach((i) => { i.value = d.duties?.[i.dataset.duty] ?? ''; });
+        draftNote.className = 'notice';
+        draftNote.innerHTML = `Picked up where you left off (saved ${esc(fmtShort(isoDate(new Date(draft.updated_at))))} at ${esc(fmtTime(draft.updated_at))}).
+          ${existing ? 'Your submitted timesheet hasn’t changed. These edits only count once you sign and submit again.' : 'Sign and submit when you’re done.'}
+          <button type="button" class="btn-link" id="ts-discard">${existing ? 'Discard these edits' : 'Start over'}</button>`;
+        $('#ts-discard').onclick = async () => {
+          if (!confirm(existing ? 'Discard your unsubmitted edits and go back to the timesheet you submitted?' : 'Clear this timesheet and start over?')) return;
+          await discardDraft(p);
+          loadPeriod();
+        };
+      }
       recalc();
     };
     loadPeriod();
-    periodInput.onchange = loadPeriod;
+    periodInput.onchange = () => { flushDraft(); loadPeriod(); };
 
     $('#ts-form').onsubmit = (e) => {
       e.preventDefault();
@@ -873,6 +948,7 @@
           ? await sb.from('timesheets').update(row).eq('id', existing.id)
           : await sb.from('timesheets').insert({ ...row, user_id: me() });
         if (res.error) throw res.error;
+        await discardDraft(row.period_start);
         toast('Timesheet signed and submitted.');
         showView('timesheets');
       });

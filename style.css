@@ -72,6 +72,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--gold); outl
 .row > label { flex: 1 1 180px; }
 .row.end { align-items: flex-end; }
 .row.end .btn { margin-bottom: .85rem; }
+.submit-row { align-items: center; }
 label.check { display: flex; gap: .6rem; align-items: flex-start; font-weight: 400; }
 label.check input { width: auto; margin-top: .25rem; }
 
