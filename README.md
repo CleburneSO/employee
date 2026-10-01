@@ -92,7 +92,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 **Uniforms (Sheriff's Office)**
 - Everyone has a **$500 uniform allowance** per year, resetting every **October 1** (unused money doesn't carry over). The amount is set in `uniform_allowance()` in `schema.sql`.
 - *Uniforms* tab: the balance left this year, a request form with one line per Galls item (item # or link, description, size, quantity, price; the total adds up), and their requests with status (Pending → Approved → Ordered → Received, or Denied / Cancelled). A request can't be more than what's left (requests still waiting count against it); the database enforces this and works out the total itself.
-- The time-off approvers (sheriff and chief deputy) get an email for each request and approve or deny it on *Approvals*. When approving they can change the amount to the actual invoice total; that amount comes out of the allowance and the deputy gets an email.
+- The time-off approvers (sheriff and chief deputy) get an email for each request and approve or deny it on *Approvals*. When approving they can change the amount to the actual invoice total, and later correct it on an approved order (**Update amount**, e.g. once the Galls invoice arrives; it can't exceed what the person has); that amount comes out of the allowance and the deputy gets an email.
 - *Payroll & History → Uniform allowance*: everyone's balance (with **Adjust** for money already spent on paper, CSV download), approved orders still to **mark ordered** from Galls and **mark received**, and recent orders. Each order opens as a printable **Uniform / Equipment Order** form (Print / Save PDF).
 - Turned off on the jail portal (`uniforms: false`).
 

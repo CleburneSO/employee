@@ -1506,9 +1506,19 @@ begin
       new.ordered_at := null; new.received_at := null;
       return new;
     end if;
-    -- Keeping track of an approved order: placed with Galls, then received
+    -- Keeping track of an approved order: placed with Galls, then received, and the amount
+    -- corrected to the real invoice (it can't go over what's left)
     if old.status = 'approved' and new.status = 'approved' then
-      new.approved_total := old.approved_total; new.reviewed_by := old.reviewed_by; new.reviewed_at := old.reviewed_at;
+      if new.approved_total is distinct from old.approved_total then
+        new.approved_total := round(new.approved_total, 2);
+        if new.approved_total is null or new.approved_total <= 0 then raise exception 'The amount has to be more than $0.'; end if;
+        select * into s from public.uniform_sums(old.user_id, old.fy_start, old.id);
+        left_over := public.uniform_allowance() + s.adjusted - s.spent;
+        if new.approved_total > left_over then
+          raise exception 'That''s more than the $% they have for this order.', to_char(greatest(left_over, 0), 'FM999990.00');
+        end if;
+      end if;
+      new.reviewed_by := old.reviewed_by; new.reviewed_at := old.reviewed_at;
       new.manager_note := old.manager_note;
       new.ordered_at := case when new.ordered_at is null then null when old.ordered_at is null then now() else old.ordered_at end;
       new.received_at := case when new.received_at is null then null when old.received_at is null then now() else old.received_at end;

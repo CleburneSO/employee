@@ -1496,7 +1496,11 @@
         <label>Note to employee (optional)<textarea id="rv-note" rows="2"></textarea></label>
         <div class="actions"><button class="btn primary" id="rv-approve">Approve</button><button class="btn danger" id="rv-deny">Deny</button></div></div>` : ''}
       ${o.status === 'pending' && isManager() && !approver ? `<p class="notice no-print">Waiting on ${esc(approverNames())} to approve or deny.</p>` : ''}
-      ${o.status === 'approved' && approver ? `<div class="actions no-print">
+      ${o.status === 'approved' && approver ? `<div class="review no-print">
+        <div class="row end"><label class="narrow">Actual amount<input type="number" id="uo-amount" min="0.01" step="0.01" value="${esc(Number(o.approved_total).toFixed(2))}" inputmode="decimal"></label>
+          <button class="btn" id="uo-amount-save" type="button">Update amount</button></div>
+        <p class="hint" id="uo-amount-hint">Change this to the real Galls invoice total. Their balance updates to match.</p></div>
+      <div class="actions no-print">
         <button class="btn" id="uo-ordered">${o.ordered_at ? 'Undo “ordered”' : 'Mark ordered from Galls'}</button>
         ${o.ordered_at ? `<button class="btn" id="uo-received">${o.received_at ? 'Undo “received”' : 'Mark received'}</button>` : ''}</div>` : ''}
       <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button></div>`);
@@ -1533,6 +1537,23 @@
       showView(state.view);
     });
     $('#uo-ordered')?.addEventListener('click', (e) => track('ordered_at', e.target));
+    $('#uo-amount-save')?.addEventListener('click', (e) => withBusy(e.target, async () => {
+      const amt = Math.round(Number($('#uo-amount').value) * 100) / 100;
+      if (!(amt > 0)) throw new Error('Enter the actual amount (more than $0).');
+      if (amt === Number(o.approved_total)) { toast('That’s already the amount.'); return; }
+      const { error } = await sb.from('uniform_orders').update({ approved_total: amt }).eq('id', o.id);
+      if (error) throw error;
+      notify('uniform_decision', o.id);   // tells them the amount taken out now
+      closeModal();
+      toast(`Amount updated to ${money(amt)}.`);
+      showView(state.view);
+    }));
+    if ($('#uo-amount')) {
+      uniformBalances().then((list) => {
+        const b = list.find((x) => x.user_id === o.user_id), hint = $('#uo-amount-hint');
+        if (hint && b) hint.textContent = `Change this to the real Galls invoice total. They can have up to ${money(Number(b.balance) + Number(o.approved_total))} for this order; their balance updates to match.`;
+      }).catch(() => {});
+    }
     $('#uo-received')?.addEventListener('click', (e) => track('received_at', e.target));
   }
 
