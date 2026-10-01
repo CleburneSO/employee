@@ -465,9 +465,13 @@
     const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers']];
     if (canSeeStats()) tabs.push(['stats', 'Stats']);
     tabs.push(['offduty', 'Off-Duty Jobs']);
-    if (isManager()) tabs.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'Team']);
-    if (isOwner()) tabs.push(['audit', 'Audit Log']);
-    if (!tabs.some(([k]) => k === state.view)) state.view = 'calendar';
+    // Manager pages sit under one "Admin" drop-down
+    const admin = [];
+    if (isManager()) admin.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'Team']);
+    if (isOwner()) admin.push(['audit', 'Audit Log']);
+    state.adminViews = admin.map(([k]) => k);
+    if (![...tabs, ...admin].some(([k]) => k === state.view)) state.view = 'calendar';
+    const tabBtn = ([k, l]) => `<button type="button" data-view="${k}" data-label="${esc(l)}">${esc(l)}${k === 'review' ? ' <span class="count tab-count" hidden></span>' : ''}</button>`;
 
     app.innerHTML = `
       <header class="topbar">
@@ -483,14 +487,20 @@
         <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="main-nav">
           <span class="menu-icon" aria-hidden="true">☰</span><span class="menu-current"></span><span class="menu-caret" aria-hidden="true">▾</span>
         </button>
-        <nav class="tabs" id="main-nav">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav>
+        <nav class="tabs" id="main-nav">${tabs.map(tabBtn).join('')}
+          ${admin.length ? `<div class="tab-group">
+            <button type="button" class="tab-group-toggle" aria-expanded="false" aria-haspopup="true">Admin <span class="count tab-count" hidden></span> <span class="tab-caret" aria-hidden="true">▾</span></button>
+            <div class="tab-group-label">Admin</div>
+            <div class="tab-drop">${admin.map(tabBtn).join('')}</div>
+          </div>` : ''}</nav>
       </div>
       <div id="due" class="due-wrap"></div>
       <main id="view"></main>`;
     $('#signout').onclick = () => sb.auth.signOut();
     bindThemeToggle();
     startIdleWatch();
-    $$('.tabs button').forEach((b) => { b.onclick = () => { setMenuOpen(false); showView(b.dataset.view); }; });
+    $$('.tabs button[data-view]').forEach((b) => { b.onclick = () => { setMenuOpen(false); setAdminOpen(false); showView(b.dataset.view); }; });
+    $('.tab-group-toggle')?.addEventListener('click', () => setAdminOpen(!$('.tab-group').classList.contains('open')));
     $('.menu-toggle').onclick = () => setMenuOpen(!$('.tabs-wrap').classList.contains('open'));
     showView(state.view);
   }
@@ -502,8 +512,30 @@
     wrap.classList.toggle('open', open);
     wrap.querySelector('.menu-toggle').setAttribute('aria-expanded', open);
   }
-  document.addEventListener('click', (e) => { if (!e.target.closest('.tabs-wrap')) setMenuOpen(false); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenuOpen(false); });
+  // Computer: the Admin tab opens a small drop-down of the manager pages
+  function setAdminOpen(open) {
+    const g = $('.tab-group');
+    if (!g) return;
+    g.classList.toggle('open', open);
+    $('.tab-group-toggle', g).setAttribute('aria-expanded', open);
+  }
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.tabs-wrap')) setMenuOpen(false);
+    if (!e.target.closest('.tab-group')) setAdminOpen(false);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMenuOpen(false); setAdminOpen(false); } });
+
+  // How many things are waiting on this manager (shown on Admin and Approvals)
+  async function refreshAdminCount() {
+    if (!isManager() || !$('.tab-count')) return;
+    const [ts, to] = await Promise.all([
+      sb.from('timesheets').select('id', { count: 'exact', head: true }).eq('status', 'submitted'),
+      canApproveTimeOff() ? sb.from('time_off_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending') : { count: 0 }
+    ]);
+    if (ts.error || to.error) return;
+    const n = (ts.count || 0) + (to.count || 0);
+    $$('.tab-count').forEach((c) => { c.textContent = n; c.hidden = !n; });
+  }
 
   // Save any timesheet draft that's waiting when the page is hidden or closed
   document.addEventListener('visibilitychange', () => { if (document.hidden) state.flushDraft?.(); });
@@ -533,9 +565,11 @@
     state.flushDraft?.();
     refreshDue();
     state.view = v;
-    $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
+    $$('.tabs button[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
+    $('.tab-group-toggle')?.classList.toggle('active', (state.adminViews || []).includes(v));
     const cur = $('.menu-current');
-    if (cur) cur.textContent = $('.tabs button.active')?.textContent || '';
+    if (cur) cur.textContent = $('.tabs button[data-view].active')?.dataset.label || '';
+    refreshAdminCount();
     const el = $('#view');
     el.innerHTML = '<div class="loading">Loading…</div>';
     try { await views[v](el); labelTables(el); }
