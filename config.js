@@ -19,5 +19,8 @@ window.APP_CONFIG = {
   // nothing earlier is offered. If you change these, also change FIRST_PERIOD /
   // PERIOD_DAYS at the top of supabase-timesheet-reminder-function.ts.
   FIRST_PAY_PERIOD: '2026-09-17',
-  PAY_PERIOD_DAYS: 14
+  PAY_PERIOD_DAYS: 14,
+
+  // Shown to managers in the Admin menu
+  OTHER_PORTAL: { label: 'Jail portal', url: 'jail/' }
 };

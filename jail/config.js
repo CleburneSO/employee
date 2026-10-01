@@ -5,8 +5,8 @@
 // ▼ From the JAIL's Supabase project → Connect (or Project Settings → Data API / API Keys).
 //   The anon / publishable key is meant to be public. NEVER put the service_role (secret) key here.
 window.APP_CONFIG = {
-  SUPABASE_URL: 'https://YOUR-PROJECT.supabase.co',
-  SUPABASE_ANON_KEY: 'YOUR-ANON-KEY',
+  SUPABASE_URL: 'https://ljewpcydupdaspmcpvoq.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqZXdwY3lkdXBkYXNwbWNwdm9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MTcwNjUsImV4cCI6MjEwNjM5MzA2NX0.JNjgRK42W7Q-ckt9imZA474_W1wJLwvMXCt7kUqBucU',
 
   // Printed at the top of every timesheet
   COMPANY_NAME: 'CLEBURNE COUNTY JAIL',
