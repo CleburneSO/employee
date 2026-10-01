@@ -18,7 +18,7 @@ A free/low-cost employee portal:
 | `app.js` | All the app logic |
 | `style.css` | Styling |
 | `config.js` | Your Supabase URL + key (edit this) |
-| `schema.sql` | Database tables, security rules — run in Supabase |
+| `schema.sql` | The whole database: tables, functions, triggers and security rules. Safe to re-run in Supabase. After changing the database in Supabase, use **Download database setup** and update this file |
 
 ## Setup (about 15 minutes)
 
@@ -49,7 +49,11 @@ In Supabase **Authentication → URL Configuration**:
 4. Refresh the site — you'll see the **Approvals** and **Team** tabs.
 
 ### 4b. Make yourself the site owner
-Run all of `owner.sql` in the **SQL Editor** (change the email at the bottom if yours is different). The site owner is a manager who also:
+In the **SQL Editor** run (with the email you sign in with):
+```sql
+update public.profiles set is_owner = true where email = 'you@example.com';
+```
+The site owner is a manager who also:
 - is the only person who can see the **Audit Log** tab (the database enforces this too)
 - can **Download database setup** at the top of the Audit Log: every table, function and security rule as one `.sql` file, with no records
 - can't be demoted or deactivated by other managers
