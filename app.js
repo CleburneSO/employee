@@ -498,7 +498,7 @@
           ${admin.length ? `<div class="tab-group">
             <button type="button" class="tab-group-toggle" aria-expanded="false" aria-haspopup="true">Admin <span class="count tab-count" hidden></span> <span class="tab-caret" aria-hidden="true">▾</span></button>
             <div class="tab-group-label">Admin</div>
-            <div class="tab-drop">${admin.map(tabBtn).join('')}${cfg.OTHER_PORTAL?.url ? `<a class="tab-link" href="${esc(cfg.OTHER_PORTAL.url)}">${esc(cfg.OTHER_PORTAL.label || 'Other portal')} ↗</a>` : ''}</div>
+            <div class="tab-drop">${admin.map(tabBtn).join('')}${cfg.OTHER_PORTAL?.url && state.profile.show_other_portal ? `<a class="tab-link" href="${esc(cfg.OTHER_PORTAL.url)}">${esc(cfg.OTHER_PORTAL.label || 'Other portal')} ↗</a>` : ''}</div>
           </div>` : ''}</nav>
       </div>
       <div id="due" class="due-wrap"></div>
@@ -3027,6 +3027,11 @@
             <div class="duty-checks">${dutyBoxes}</div>
           </fieldset>
 
+          ${cfg.OTHER_PORTAL?.url && 'show_other_portal' in p ? `<fieldset class="person-set">
+            <legend>${esc(cfg.OTHER_PORTAL.label || 'Other portal')}</legend>
+            <label class="check"><input type="checkbox" name="show_other_portal" ${p.show_other_portal ? 'checked' : ''}> <span><strong>Show link to the ${esc(cfg.OTHER_PORTAL.label || 'other portal')}</strong> in their Admin menu. Managers only. It's just a shortcut: they still need their own account there to sign in.</span></label>
+          </fieldset>` : ''}
+
           ${'timeoff_approver' in p ? `<fieldset class="person-set">
             <legend>Time off</legend>
             <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.</span></label>
@@ -3063,6 +3068,7 @@
           reports_to: f.reports_to.value || null
         };
         if (!self) update.role = f.role.value;
+        if (f.show_other_portal) update.show_other_portal = f.show_other_portal.checked;
         if (f.timeoff_approver) {
           update.timeoff_approver = f.timeoff_approver.checked;
           if (update.timeoff_approver && (update.role || p.role) !== 'manager') { toast('Only managers can approve time off. Change their role to Manager first.', true); return; }
@@ -3094,7 +3100,8 @@
           if (self) Object.assign(state.profile, update);
           closeModal();
           toast('Saved.');
-          showView('team');
+          if (self && 'show_other_portal' in update) renderShell();   // the Admin menu link may have changed
+          else showView('team');
         });
       };
       $('#person-deactivate')?.addEventListener('click', (e) => setActive(e.target, p, false));
