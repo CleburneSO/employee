@@ -15,6 +15,11 @@
 
   const ORG = cfg.COMPANY_NAME || 'Employee Portal';
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
+  // Which parts of the portal are on (FEATURES in config.js). Everything is on unless switched off,
+  // e.g. the jail portal turns off case numbers, patrol stats and off-duty jobs.
+  const FEATURES = { cases: true, stats: true, offduty: true, ...(cfg.FEATURES || {}) };
+  const on = (f) => FEATURES[f] !== false;
+  const PORTAL_LABEL = cfg.PORTAL_LABEL || '';   // e.g. "Jail", shown next to the logo
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
   // The portal's first pay period (FIRST_PAY_PERIOD in config.js). Every pay period is counted
   // in PAY_PERIOD_DAYS steps from this date, and nothing earlier is offered.
@@ -225,7 +230,7 @@
   /* ---------------- auto sign-out when idle ---------------- */
   const IDLE_MS = (Number(cfg.IDLE_MINUTES) || 30) * 60000;
   const WARN_MS = Math.min(2 * 60000, IDLE_MS / 2);
-  const IDLE_KEY = 'portal_last_activity';
+  const IDLE_KEY = `portal_last_activity:${cfg.SUPABASE_URL}`;   // per portal (they share one web address)
   let idleOn = false, idleTimer = null, lastLocal = Date.now(), signedOutForIdle = false;
   const storeActivity = (t) => { try { localStorage.setItem(IDLE_KEY, String(t)); } catch (_) { /* private mode */ } };
   const lastActivity = () => { let t = lastLocal; try { t = Math.max(t, Number(localStorage.getItem(IDLE_KEY)) || 0); } catch (_) { /* ignore */ } return t; };
@@ -344,6 +349,7 @@
     app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
       ${logoImg('auth-logo')}
       <h1 class="auth-org">${esc(ORG)}</h1>
+      ${PORTAL_LABEL ? `<p class="portal-label-auth">${esc(PORTAL_LABEL)} portal</p>` : ''}
       ${signedOutForIdle && !reset ? `<div class="notice">You were signed out after ${Math.round(IDLE_MS / 60000)} minutes of inactivity.</div>` : ''}
       <p class="muted">${reset ? 'Enter your email and we’ll send you a reset link.' : 'Sign in to your account.'}</p>
       <form id="auth-form">
@@ -462,9 +468,10 @@
   const views = {};
 
   function renderShell() {
-    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers']];
-    if (canSeeStats()) tabs.push(['stats', 'Stats']);
-    tabs.push(['offduty', 'Off-Duty Jobs']);
+    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off']];
+    if (on('cases')) tabs.push(['cases', 'Case Numbers']);
+    if (on('stats') && canSeeStats()) tabs.push(['stats', 'Stats']);
+    if (on('offduty')) tabs.push(['offduty', 'Off-Duty Jobs']);
     // Manager pages sit under one "Admin" drop-down
     const admin = [];
     if (isManager()) admin.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'Team']);
@@ -475,7 +482,7 @@
 
     app.innerHTML = `
       <header class="topbar">
-        <div class="brand">${logoImg('brand-logo')}<span>${esc(ORG)}</span></div>
+        <div class="brand">${logoImg('brand-logo')}<span>${esc(ORG)}</span>${PORTAL_LABEL ? `<b class="portal-label">${esc(PORTAL_LABEL)}</b>` : ''}</div>
         <div class="user">
           <span>${esc(state.profile.full_name)}</span>
           <span class="role">${esc(state.profile.role)}</span>
@@ -491,7 +498,7 @@
           ${admin.length ? `<div class="tab-group">
             <button type="button" class="tab-group-toggle" aria-expanded="false" aria-haspopup="true">Admin <span class="count tab-count" hidden></span> <span class="tab-caret" aria-hidden="true">▾</span></button>
             <div class="tab-group-label">Admin</div>
-            <div class="tab-drop">${admin.map(tabBtn).join('')}</div>
+            <div class="tab-drop">${admin.map(tabBtn).join('')}${cfg.OTHER_PORTAL?.url ? `<a class="tab-link" href="${esc(cfg.OTHER_PORTAL.url)}">${esc(cfg.OTHER_PORTAL.label || 'Other portal')} ↗</a>` : ''}</div>
           </div>` : ''}</nav>
       </div>
       <div id="due" class="due-wrap"></div>
@@ -1677,8 +1684,8 @@
     // Off-duty jobs: shown while spots are open (and not past), or to the people approved to work them
     const jobFrom = new Date(Math.min(gridStart, new Date(now.getFullYear(), now.getMonth(), now.getDate())));
     const jobTo = new Date(Math.max(gridEnd, soonEnd));
-    const jobsR = await sb.from('offduty_jobs').select('*').neq('status', 'cancelled')
-      .gte('starts_at', jobFrom.toISOString()).lt('starts_at', jobTo.toISOString()).order('starts_at');
+    const jobsR = on('offduty') ? await sb.from('offduty_jobs').select('*').neq('status', 'cancelled')
+      .gte('starts_at', jobFrom.toISOString()).lt('starts_at', jobTo.toISOString()).order('starts_at') : { data: [] };
     let jobEv = [];
     if (!jobsR.error && jobsR.data.length) {
       const reqR = await sb.from('offduty_requests').select('job_id, user_id, status').in('job_id', jobsR.data.map((j) => j.id));
@@ -1736,7 +1743,7 @@
             <button class="btn small" id="cal-next" aria-label="Next month">›</button>
             <button class="btn small" id="cal-today">Today</button>
           </div>
-          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="ev-dot ev-personal"></span>My events</span><span class="lg"><span class="ev-dot ev-offduty"></span>Off-duty jobs</span><span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
+          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="ev-dot ev-personal"></span>My events</span>${on('offduty') ? '<span class="lg"><span class="ev-dot ev-offduty"></span>Off-duty jobs</span>' : ''}<span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
           <div class="cal-tools">
             ${isManager() ? `<div class="seg-toggle" role="group" aria-label="Whose events">
               <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
@@ -2884,7 +2891,7 @@
     const patrolText = (p) => p.patrol
       ? `<span>${p.shift ? esc(p.shift) + ' Shift' : '<span class="error-text">No shift</span>'}${p.reports_to ? ` · <span class="muted">${esc(nameOf(p.reports_to))}</span>` : ''}</span>`
       : '<span class="muted">—</span>';
-    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}</span>`;
+    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${on('stats') && p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}</span>`;
     const matches = (p) => {
       const q = tf.q.trim().toLowerCase();
       if (q && !`${p.full_name} ${p.email}`.toLowerCase().includes(q)) return false;
@@ -2895,8 +2902,8 @@
       if (tf.show === 'nosup') return p.patrol && !p.reports_to;
       return true;
     };
-    const SHOW = [['', 'Everyone'], ['patrol', 'Patrol'], ['nonpatrol', 'Not patrol'], ['supervisor', 'Supervisors'],
-                  ['manager', 'Managers'], ['nosup', 'Patrol with no supervisor']];
+    const SHOW = on('stats') ? [['', 'Everyone'], ['patrol', 'Patrol'], ['nonpatrol', 'Not patrol'], ['supervisor', 'Supervisors'],
+                  ['manager', 'Managers'], ['nosup', 'Patrol with no supervisor']] : [['', 'Everyone'], ['manager', 'Managers']];
 
     el.innerHTML = `
       <section class="card">
@@ -2919,11 +2926,11 @@
           <label>Show<select id="tm-show">${SHOW.map(([k, l]) => `<option value="${k}" ${tf.show === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
         <div class="table-wrap"><table class="list team-list">
-          <thead><tr><th>Name</th><th>Role</th><th>Patrol</th><th>Special duties</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Role</th>${on('stats') ? '<th>Patrol</th>' : ''}<th>Special duties</th><th></th></tr></thead>
           <tbody>${current.map((p) => `<tr data-id="${p.id}">
             <td><div class="tm-name">${esc(p.full_name || '(no name)')}</div><div class="tm-email">${esc(p.email)}</div></td>
             <td>${roleText(p)}</td>
-            <td>${patrolText(p)}</td>
+            ${on('stats') ? `<td>${patrolText(p)}</td>` : ''}
             <td class="tm-duties">${dutyChipsFor(p) || '<span class="muted">—</span>'}</td>
             <td class="right"><button class="btn small p-edit">Edit</button></td>
           </tr>`).join('')}</tbody>
@@ -3025,7 +3032,7 @@
             <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.</span></label>
           </fieldset>` : ''}
 
-          <fieldset class="person-set">
+          <fieldset class="person-set" ${on('stats') ? '' : 'hidden'}>
             <legend>Patrol stats</legend>
             <label class="check"><input type="checkbox" name="patrol" ${p.patrol ? 'checked' : ''}> <span><strong>Patrol</strong> — logs stats and shows up in them</span></label>
             <div class="row">

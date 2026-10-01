@@ -279,6 +279,9 @@ table.extras tr.duty-row.has-hours th, table.extras tr.duty-row.has-hours td { b
 .auth-card:has(.auth-logo) > p.muted { text-align: center; }
 .brand { display: flex; align-items: center; gap: .65rem; }
 .brand-logo { height: 46px; width: auto; display: block; }
+.portal-label { font-size: .8rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #fff; background: var(--primary-dark, #41512c); padding: 2px 9px; border-radius: 99px; }
+.portal-label-auth { text-align: center; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; margin: -.4rem 0 .6rem; color: var(--primary); }
+.tabs .tab-drop a.tab-link { display: block; padding: .65rem 1rem; border-top: 1px solid var(--line); margin-top: .3rem; color: var(--primary); text-decoration: none; font-weight: 600; white-space: nowrap; }
 @media screen and (max-width: 520px) { .brand { font-size: .9rem; } .brand-logo { height: 34px; max-width: 70vw; } }
 
 /* person filter on Approvals */

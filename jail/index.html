@@ -1,10 +1,11 @@
 <!doctype html>
+<!-- Cleburne County Jail portal: same app as the Sheriff's Office portal (../app.js), with its own config.js and Supabase project -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cleburne County Sheriff's Office — Employee Portal</title>
-  <link rel="stylesheet" href="style.css?v=20261002d">
+  <title>Cleburne County Jail — Employee Portal</title>
+  <link rel="stylesheet" href="../style.css?v=20261002d">
   <script>
     // Light / dark: the person's choice if they made one, otherwise their device's setting
     (function () {
@@ -13,13 +14,13 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="icon" href="seal.png">
+  <link rel="icon" href="../seal.png">
   <!-- Add to home screen: opens full-screen like an app, with the seal as its icon -->
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="CCSO Portal">
+  <meta name="apple-mobile-web-app-title" content="Jail Portal">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#41512c">
 </head>
@@ -37,6 +38,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js?v=20261002d"></script>
-  <script src="app.js?v=20261002d"></script>
+  <script src="../app.js?v=20261002d"></script>
 </body>
 </html>

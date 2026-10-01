@@ -28,6 +28,12 @@ create table if not exists public.app_secrets (
 alter table public.app_secrets enable row level security;
 revoke all on public.app_secrets from anon, authenticated;
 
+-- ▼ This project's address (Supabase → Project Settings → Data API → Project URL).
+--   The Sheriff's Office portal uses the one below. When setting up the JAIL portal,
+--   change it to the jail project's address before running this file.
+insert into public.app_secrets (key, value) values ('project_url', 'https://tywkcyehermpttuvkmta.supabase.co')
+on conflict (key) do update set value = excluded.value;
+
 -- A random secret only this job and the function know (stored in app_secrets, which
 -- the website can't read). Re-running keeps the existing one.
 insert into public.app_secrets (key, value)
@@ -42,7 +48,7 @@ returns bigint
 language sql security definer set search_path = public, extensions
 as $$
   select net.http_post(
-    url := 'https://tywkcyehermpttuvkmta.supabase.co/functions/v1/timesheet-reminder',
+    url := (select value from public.app_secrets where key = 'project_url') || '/functions/v1/timesheet-reminder',
     body := jsonb_build_object('dry_run', dry_run),
     headers := jsonb_build_object('Content-Type', 'application/json',
                  'x-cron-secret', (select value from public.app_secrets where key = 'cron_secret')),

@@ -153,6 +153,22 @@ Setup (uses your Resend account, with ccsoportal.com verified):
 
 If alerts aren't set up, everything still saves; the site shows a one-time note that the email couldn't be sent. Deactivated people never get emails.
 
+## Jail portal (`/jail/`)
+
+The Cleburne County Jail has its own portal at `ccsoportal.com/jail/`. It's the same app (`app.js`, `style.css`) with its own `jail/config.js` and **its own Supabase project**, so jail logins, records, approvals and audit log are completely separate from the Sheriff's Office. It has only the calendar, timesheets and time off (`FEATURES` in `jail/config.js` turns off case numbers, patrol stats and off-duty jobs), prints **CLEBURNE COUNTY JAIL** on timesheets, and shows a "Jail" label. Managers see a link to the other portal in the Admin menu.
+
+One-time setup:
+1. **supabase.com → New project** (e.g. "CCSO Jail").
+2. **SQL Editor:** run `schema.sql`.
+3. **Authentication → Sign In / Providers:** turn off "Allow new users to sign up". **URL Configuration:** Site URL and Redirect URLs `https://ccsoportal.com/jail/`. **Emails → SMTP:** the same Resend sender as the Sheriff's Office project.
+4. **Edge Functions:** deploy `notify`, `invite-user`, `timeoff-alert`, `timesheet-reminder` and `event-reminder` from this repo (each with "Verify JWT" off). **Secrets:** `RESEND_API_KEY` and `MAIL_FROM` as for the Sheriff's Office, and `SITE_URL` = `https://ccsoportal.com/jail/`.
+5. **SQL Editor:** run `timesheet-reminder.sql` and `event-reminder.sql`, after changing the address on the line marked ▼ near the top of each to the jail project's address (Project Settings → Data API → Project URL).
+6. **`jail/config.js`:** paste the jail project's URL and anon / publishable key over `YOUR-PROJECT` / `YOUR-ANON-KEY`.
+7. **Invite** the jail administrator, then run in the jail project's SQL Editor: `update public.profiles set role = 'manager', timeoff_approver = true where email = '…';` (do the same for the sheriff, without `timeoff_approver` if he shouldn't get the emails). Optionally make yourself site owner there too (`is_owner = true`). Then invite jail staff from the Team tab.
+8. Ask for the "Jail portal" link to be turned on in the Sheriff's Office `config.js` (`OTHER_PORTAL: { label: 'Jail portal', url: 'jail/' }`).
+
+When updating the site, bump the `?v=` version in **both** `index.html` and `jail/index.html`.
+
 ## Install on a phone
 
 The portal can sit on the home screen like an app (full screen, seal icon, "CCSO Portal"):
