@@ -24,6 +24,19 @@ const json = (body: unknown, status = 200) =>
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
+// Same branded layout as the notify function's emails
+function page(site: string, heading: string, lines: string[], button?: string) {
+  const rows = lines.filter(Boolean).map((l) => `<p style="margin:0 0 10px;">${l}</p>`).join('');
+  return `<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0;font-family:Arial,Helvetica,sans-serif;">
+  <tr><td align="center"><table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border-top:4px solid #e5a34c;border-radius:8px;">
+    <tr><td align="center" style="padding:24px 24px 4px;"><img src="${site}logo.png" alt="Cleburne County Sheriff's Office" width="260" style="display:block;width:260px;max-width:100%;height:auto;border:0;"></td></tr>
+    <tr><td style="padding:14px 30px 6px;color:#1d2330;font-size:15px;line-height:1.5;">
+      <h1 style="margin:0 0 12px;font-size:20px;color:#41512c;">${heading}</h1>${rows}</td></tr>
+    <tr><td align="center" style="padding:6px 30px 26px;"><a href="${site}" style="display:inline-block;background:#41512c;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;padding:11px 24px;border-radius:6px;">${button || 'Open the Employee Portal'}</a></td></tr>
+    <tr><td style="padding:12px 30px;border-top:1px solid #e3e6ec;color:#98a1b0;font-size:12px;">Cleburne County Sheriff's Office Employee Portal · automated message, please don't reply</td></tr>
+  </table></td></tr></table>`;
+}
+
 const DAY = 86400000;
 const toDate = (iso: string) => new Date(`${iso}T00:00:00Z`);
 const toIso = (d: Date) => d.toISOString().slice(0, 10);
@@ -75,7 +88,8 @@ Deno.serve(async (req) => {
     const toSend = missing.filter((p) => ids.has(p.id));
     if (!toSend.length) return json({ sent: 0, note: 'Already reminded.' });
 
-    const site = Deno.env.get('SITE_URL') || '';
+    let site = Deno.env.get('SITE_URL') || '';
+    if (site && !site.endsWith('/')) site += '/';
     const period = `${label(start)} – ${label(end)}`;
     const emails = toSend.map((p) => {
       const sentBack = status.get(p.id) === 'rejected';
@@ -83,12 +97,14 @@ Deno.serve(async (req) => {
         from: Deno.env.get('MAIL_FROM'),
         to: [p.email],
         subject: sentBack ? `Reminder: your timesheet for ${period} was sent back` : `Reminder: timesheet due for ${period}`,
-        html: `<p>Hi ${esc((p.full_name || '').split(' ')[0] || 'there')},</p>
-          <p>${sentBack
+        html: page(site, sentBack ? 'Your timesheet still needs to be resubmitted' : 'Your timesheet is due today', [
+          `Hi ${esc((p.full_name || '').split(' ')[0] || 'there')},`,
+          sentBack
             ? `Your timesheet for <strong>${esc(period)}</strong> was sent back and hasn’t been resubmitted yet.`
-            : `Today is the last day of the <strong>${esc(period)}</strong> pay period, and we don’t have your timesheet yet.`}</p>
-          <p>${site ? `<a href="${esc(site)}">Open the Employee Portal</a> and go to <strong>My Timesheets</strong>` : 'Open the Employee Portal and go to My Timesheets'} to finish and sign it.</p>
-          <p style="color:#666;font-size:13px">If you’ve already turned it in another way, you can ignore this.</p>`
+            : `Today is the last day of the <strong>${esc(period)}</strong> pay period, and we don’t have your timesheet yet.`,
+          'Finish and sign it on the My Timesheets tab.',
+          '<span style="color:#98a1b0;font-size:13px;">If you’ve already turned it in another way, you can ignore this.</span>'
+        ], sentBack ? 'Fix my timesheet' : 'Fill out my timesheet')
       };
     });
 
