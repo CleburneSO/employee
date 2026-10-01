@@ -359,6 +359,20 @@ create table if not exists public.event_reminders (
 );
 alter table public.event_reminders enable row level security;
 
+-- Short-lived passes for "Add to my calendar" on iPhone: the phone opens the event-ics function's
+-- address with one of these instead of a login. Each works for one event for 10 minutes.
+create table if not exists public.calendar_tickets (
+  token text not null,
+  user_id uuid not null,
+  kind text not null,
+  item_id uuid not null,
+  expires_at timestamp with time zone not null,
+  constraint calendar_tickets_pkey PRIMARY KEY (token),
+  constraint calendar_tickets_kind_check CHECK ((kind = ANY (ARRAY['event'::text, 'job'::text]))),
+  constraint calendar_tickets_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+alter table public.calendar_tickets enable row level security;
+
 -- Server-only settings (e.g. the secret the daily reminder job uses). Row Level Security is on with
 -- no rules, so nobody can read this through the website; only Edge Functions and the SQL Editor can.
 create table if not exists public.app_secrets (
@@ -1277,9 +1291,36 @@ begin
 end $function$
 ;
 
+-- Hands out a calendar pass, only for an event the person can see (or an off-duty job)
+CREATE OR REPLACE FUNCTION public.calendar_ticket(p_kind text, p_id uuid)
+ RETURNS text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare t text;
+begin
+  if auth.uid() is null or not public.is_active() then raise exception 'Not allowed.'; end if;
+  if p_kind = 'event' then
+    if not public.can_see_event(p_id) then raise exception 'Not allowed.'; end if;
+  elsif p_kind = 'job' then
+    if not exists (select 1 from public.offduty_jobs where id = p_id) then raise exception 'Not allowed.'; end if;
+  else
+    raise exception 'Not allowed.';
+  end if;
+  delete from public.calendar_tickets where expires_at < now();
+  t := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  insert into public.calendar_tickets (token, user_id, kind, item_id, expires_at)
+  values (t, auth.uid(), p_kind, p_id, now() + interval '10 minutes');
+  return t;
+end $function$
+;
+
 -- Functions in the public schema can be called by anyone through the API
 -- unless execute is revoked. These are only for use inside other functions.
 revoke execute on function public.patrol_month_facts(date) from public, anon, authenticated;
+revoke execute on function public.calendar_ticket(text, uuid) from public, anon;
+grant execute on function public.calendar_ticket(text, uuid) to authenticated;
 revoke execute on function public.export_db_setup() from public, anon;
 grant execute on function public.export_db_setup() to authenticated;
 

@@ -1834,7 +1834,7 @@
           ${(e.owner_id ? e.owner_id === me() : isManager()) ? '<button class="btn" id="ev-edit">Edit</button>' : ''}
         </div>
       </div>`);
-    $('#ev-ics').onclick = () => addToPhoneCalendar(e);
+    $('#ev-ics').onclick = (ev) => withBusy(ev.currentTarget, () => addToPhoneCalendar(e));
     $('#ev-edit')?.addEventListener('click', () => (e.owner_id ? editPersonal(e) : editEvent(e, tagged, people)));
   }
 
@@ -1856,13 +1856,17 @@
       'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${text(title)}`, e.all_day ? 'TRIGGER:-PT15H' : 'TRIGGER:-PT1H', 'END:VALARM',
       'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).map(fold).join('\r\n') + '\r\n';
   }
-  function addToPhoneCalendar(e) {
-    const ics = icsFor(e);
-    // iPhone / iPad: Safari shows "Add to Calendar" for a calendar file it opens directly
+  async function addToPhoneCalendar(e) {
+    // iPhone / iPad: Safari only offers "Add to Calendar" for a calendar file loaded from a real web
+    // address, so get a 10-minute pass for this event and open the event-ics function with it
     if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
-      location.href = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(ics);
+      const { data: t, error } = await sb.rpc('calendar_ticket', { p_kind: e.isJob ? 'job' : 'event', p_id: e.isJob ? (e.job?.id || e.id) : e.id });
+      if (error) throw new Error('Couldn’t add it to your calendar right now. Try again in a moment.');
+      location.href = `${cfg.SUPABASE_URL}/functions/v1/event-ics?t=${encodeURIComponent(t)}`;
       return;
     }
+    // Computers and Android: download the calendar file, which opens in the calendar app
+    const ics = icsFor(e);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
     a.download = `${(e.title || 'event').replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'event'}.ics`;
@@ -1890,7 +1894,7 @@
         </div>
       </div>`);
     $('#go-offduty').onclick = () => { closeModal(); showView('offduty'); };
-    $('#ev-ics')?.addEventListener('click', () => addToPhoneCalendar({ ...e, id: j.id, title: `Off-duty: ${j.title}` }));
+    $('#ev-ics')?.addEventListener('click', (ev) => withBusy(ev.currentTarget, () => addToPhoneCalendar({ ...e, id: j.id, title: `Off-duty: ${j.title}` })));
   }
 
   // A personal event: only its owner can see it (the database enforces this). No emails.
