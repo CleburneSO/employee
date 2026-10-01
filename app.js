@@ -17,8 +17,11 @@
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   // Which parts of the portal are on (FEATURES in config.js). Everything is on unless switched off,
   // e.g. the jail portal turns off case numbers, patrol stats and off-duty jobs.
-  const FEATURES = { cases: true, stats: true, offduty: true, ...(cfg.FEATURES || {}) };
+  const FEATURES = { cases: true, stats: true, offduty: true, comp: true, ...(cfg.FEATURES || {}) };
   const on = (f) => FEATURES[f] !== false;
+  // Comp time: everyone (true), nobody (false), or only people ticked "Has comp time" on the Team tab ('ticked')
+  const compPerPerson = FEATURES.comp === 'ticked';
+  const hasComp = (p) => on('comp') && (!compPerPerson || !!p?.comp_time);
   const PORTAL_LABEL = cfg.PORTAL_LABEL || '';   // e.g. "Jail", shown next to the logo
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
   // The portal's first pay period (FIRST_PAY_PERIOD in config.js). Every pay period is counted
@@ -1166,7 +1169,7 @@
 
   /* ---------------- time off ---------------- */
   // What people can ask for now (older requests may have other types; typeLabel still names them)
-  const REQUEST_TYPES = [['vacation', 'Vacation'], ['sick', 'Sick'], ['comp', 'Comp time (use)']];
+  const requestTypes = () => [['vacation', 'Vacation'], ['sick', 'Sick'], ['comp', 'Comp time (use)']].filter(([k]) => k !== 'comp' || hasComp(state.profile));
   const isComp = (t) => t === 'comp' || t === 'comp_earned';
   const hoursText = (r) => r.hours == null
     ? `${dayCount(r.start_date, r.end_date)} day${dayCount(r.start_date, r.end_date) > 1 ? 's' : ''}`
@@ -1203,7 +1206,7 @@
     ledger.forEach((l) => { run += l.hours; l.after = run; });
     ledger.reverse();
 
-    el.innerHTML = `
+    el.innerHTML = `${hasComp(state.profile) ? `
       <section class="card comp-card">
         <div class="comp-head">
           <div>
@@ -1231,13 +1234,13 @@
               <td class="num">${l.hours > 0 ? '+' : '−'}${hrs(Math.abs(l.hours))}</td><td class="num">${hrs(l.after)}</td></tr>`).join('')}</tbody>
           </table></div>
         </details>` : ''}
-      </section>
+      </section>` : ''}
 
       <section class="card">
         <h2>Request time off</h2>
         <form id="to-form" autocomplete="off">
           <div class="row">
-            <label>Type<select name="type">${REQUEST_TYPES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+            <label>Type<select name="type">${requestTypes().map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
             <label>First day<input type="date" name="start" required></label>
             <label>Last day<input type="date" name="end" required></label>
             <label class="narrow">Total hours<input type="number" name="hours" min="0.25" step="0.25" inputmode="decimal" required placeholder="e.g. 12"></label>
@@ -1251,7 +1254,7 @@
 
     // Log comp earned
     const ce = $('#ce-form');
-    ce.onsubmit = (e) => {
+    if (ce) ce.onsubmit = (e) => {
       e.preventDefault();
       const hours = Number(ce.hours.value);
       withBusy(ce.querySelector('button'), async () => {
@@ -1455,7 +1458,7 @@
       compBalances()
     ]);
     for (const r of [tsDone, toDone]) if (r.error) throw r.error;
-    const compRows = bals.filter((b) => (who ? b.user_id === who : b.active !== false));
+    const compRows = bals.filter((b) => (who ? b.user_id === who : b.active !== false) && (!compPerPerson || state.people[b.user_id]?.comp_time));
     const forWho = who ? ` — ${esc(personName(who))}` : '';
 
     el.innerHTML = `
@@ -1469,7 +1472,7 @@
         ${who ? '<button class="btn" id="f-clear">Show everyone</button>' : ''}
         <p class="hint">${who ? 'Showing all of this person’s timesheets and time off.' : 'Pick a person to see their full history. Tip: click the list and start typing a name.'}</p>
       </section>
-      <section class="card">
+      ${on('comp') && (!compPerPerson || compRows.length) ? `<section class="card">
         <details class="fold" ${who ? 'open' : ''}>
           <summary><h2>Comp time balances${forWho}</h2></summary>
           <p class="muted">Balance = approved comp earned − approved comp used + adjustments. Use <strong>Adjust</strong> to enter someone’s starting balance or fix a mistake.</p>
@@ -1483,7 +1486,7 @@
           </table></div>
           <button class="btn small" id="comp-csv" type="button">Download CSV</button>
         </details>
-      </section>
+      </section>` : ''}
       <section class="card"><h2>Payroll: print or export a pay period${forWho}</h2>
         <form id="exp" class="row end">
           <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
@@ -1503,7 +1506,7 @@
     bindTimesheetButtons($('#ts-done'), tsDone.data);
     bindTimeOffButtons($('#to-done'), toDone.data);
 
-    $('#comp-csv').onclick = () => downloadCSV(`comp-balances-${localToday()}.csv`, [
+    if ($('#comp-csv')) $('#comp-csv').onclick = () => downloadCSV(`comp-balances-${localToday()}.csv`, [
       ['Name', 'Balance', 'Earned (approved)', 'Used (approved)', 'Adjustments', 'Pending earned', 'Pending used'],
       ...compRows.map((b) => [b.full_name, Number(b.balance), Number(b.earned), Number(b.used), Number(b.adjusted), Number(b.pending_earned), Number(b.pending_used)])
     ]);
@@ -3027,6 +3030,11 @@
             <div class="duty-checks">${dutyBoxes}</div>
           </fieldset>
 
+          ${compPerPerson && 'comp_time' in p ? `<fieldset class="person-set">
+            <legend>Comp time</legend>
+            <label class="check"><input type="checkbox" name="comp_time" ${p.comp_time ? 'checked' : ''}> <span><strong>Has comp time</strong> — can log comp time earned, see their balance and use comp time off.</span></label>
+          </fieldset>` : ''}
+
           ${'timeoff_approver' in p ? `<fieldset class="person-set">
             <legend>Time off</legend>
             <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.</span></label>
@@ -3063,6 +3071,7 @@
           reports_to: f.reports_to.value || null
         };
         if (!self) update.role = f.role.value;
+        if (f.comp_time) update.comp_time = f.comp_time.checked;
         if (f.timeoff_approver) {
           update.timeoff_approver = f.timeoff_approver.checked;
           if (update.timeoff_approver && (update.role || p.role) !== 'manager') { toast('Only managers can approve time off. Change their role to Manager first.', true); return; }

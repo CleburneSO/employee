@@ -31,6 +31,7 @@ create table if not exists public.profiles (
   usual_out text,
   is_owner boolean default false not null,
   timeoff_approver boolean default false not null,
+  comp_time boolean default false not null,
   constraint profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE,
   constraint profiles_pkey PRIMARY KEY (id),
   constraint profiles_reports_to_fkey FOREIGN KEY (reports_to) REFERENCES profiles(id) ON DELETE SET NULL,
@@ -370,6 +371,8 @@ revoke all on public.app_secrets from anon, authenticated;
 
 -- Columns added after the tables were first created
 alter table public.profiles add column if not exists timeoff_approver boolean default false not null;
+-- Has comp time (only used by portals that give comp time to ticked people, e.g. the jail)
+alter table public.profiles add column if not exists comp_time boolean default false not null;
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
 -- When managers were emailed about an off-duty request (so it's only once per request)
 alter table public.offduty_requests add column if not exists managers_alerted_at timestamp with time zone;
@@ -633,6 +636,7 @@ begin
     new.is_supervisor := false;
     new.reports_to := null;
     new.timeoff_approver := false;
+    new.comp_time := false;
     return new;
   end if;
 
@@ -649,6 +653,7 @@ begin
     new.is_supervisor := old.is_supervisor;
     new.reports_to := old.reports_to;
     new.timeoff_approver := old.timeoff_approver;
+    new.comp_time := old.comp_time;
   end if;
   -- Only managers approve time off
   if new.role <> 'manager' then

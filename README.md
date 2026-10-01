@@ -155,7 +155,7 @@ If alerts aren't set up, everything still saves; the site shows a one-time note 
 
 ## Jail portal (`/jail/`)
 
-The Cleburne County Jail has its own portal at `ccsoportal.com/jail/`. It's the same app (`app.js`, `style.css`) with its own `jail/config.js` and **its own Supabase project**, so jail logins, records, approvals and audit log are completely separate from the Sheriff's Office. It has only the calendar, timesheets and time off (`FEATURES` in `jail/config.js` turns off case numbers, patrol stats and off-duty jobs), prints **CLEBURNE COUNTY JAIL** on timesheets, and shows a "Jail" label. Managers see a link to the other portal in the Admin menu.
+The Cleburne County Jail has its own portal at `ccsoportal.com/jail/`. It's the same app (`app.js`, `style.css`) with its own `jail/config.js` and **its own Supabase project**, so jail logins, records, approvals and audit log are completely separate from the Sheriff's Office. It has only the calendar, timesheets and time off (`FEATURES` in `jail/config.js` turns off case numbers, patrol stats and off-duty jobs; comp time is only for people ticked **Has comp time** on the Team tab, e.g. the jail administrator), prints **CLEBURNE COUNTY JAIL** on timesheets, and shows a "Jail" label. Managers see a link to the other portal in the Admin menu.
 
 One-time setup:
 1. **supabase.com → New project** (e.g. "CCSO Jail").
