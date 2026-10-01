@@ -72,7 +72,8 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 **Calendar (everyone; the first tab)**
 - **Announcements** and **Training announcements** at the top (managers post, pin, set "show until", edit or delete).
 - A month **calendar**. Deputies see only **their own** events (the ones they're tagged on) plus anything marked **Show to everyone**; this is enforced by the database. Managers see all events and can switch to **Just mine**. When adding an event, managers tag deputies (**Select all** / **Clear** helpers) or tick **Show to everyone**. Your own events are outlined in red. On a phone, tap a day to see its events.
-- **Coming up**: the next 45 days as a list.
+- **Coming up**: the next 15 days as a list.
+- **My events**: anyone can tap **Add my event** (or tap a day → **Add my event this day**) for a personal event: dentist, day off, kid's game. Only that person sees it (not other deputies, not managers); it never sends email. The database enforces this.
 - **Paid holidays**: add an event with type **Paid holiday** (hours default to 8). It shows on everyone's calendar, and when anyone opens a timesheet for that pay period, **Total Holiday Hours** and that day's explanation are filled in automatically (editable before signing). Timesheets already submitted aren't changed.
 
 **Off-Duty Jobs (everyone)**
@@ -87,8 +88,8 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - **Going live:** a manager sets **Next count** under Case number settings to one more than the last number used on paper (e.g. last used 0933 → enter 934).
 
 **Managers**
-- *Approvals:* review pending timesheets and time off, approve or send back / deny with a note. Open any timesheet and click **Print / Save PDF** for a paper copy.
-- *Payroll:* pick a pay period and **Print all timesheets** (one page per deputy), or download a CSV (one row per person, or one row per day).
+- *Approvals:* only what's waiting: pending timesheets and time off. Approve or send back / deny with a note. Open any timesheet, time-off request or comp time entry and click **Print / Save PDF** for a paper copy (employees can print their own too).
+- *Payroll & History:* comp time balances (and adjustments), payroll (pick a pay period and **Print all timesheets**, one page per deputy, or download a CSV), and the approved / denied history of timesheets and time off. Pick a person to see their full history.
 - *Team:* edit names and roles, **Deactivate** people who leave (they're locked out immediately; their records are kept and still searchable; don't delete them in Supabase), and tick which **special duties** each person has. Below that, manage the duty list: short name (K9), the line printed on the timesheet, the small-print note, optional **auto hours** pre-filled each pay period, **Everyone** (show on all timesheets), and **Active** (turn off to retire a duty; old timesheets keep it). It starts with Traffic OT, K9, DEA and Supervisor. Rename or edit them to match your wording.
 
 ## Good to know

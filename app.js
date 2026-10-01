@@ -126,7 +126,7 @@
 
   function personName(id, fallback = '') {
     if (id === me()) return state.profile.full_name;
-    return state.people[id]?.full_name || state.people[id]?.email || fallback;
+    return state.people[id]?.full_name || state.people[id]?.email || state.dir[id]?.full_name || fallback;
   }
 
   function toast(msg, isError = false) {
@@ -465,7 +465,7 @@
     const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off'], ['cases', 'Case Numbers']];
     if (canSeeStats()) tabs.push(['stats', 'Stats']);
     tabs.push(['offduty', 'Off-Duty Jobs']);
-    if (isManager()) tabs.push(['review', 'Approvals'], ['team', 'Team']);
+    if (isManager()) tabs.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'Team']);
     if (isOwner()) tabs.push(['audit', 'Audit Log']);
     if (!tabs.some(([k]) => k === state.view)) state.view = 'calendar';
 
@@ -1140,7 +1140,8 @@
     const [reqs, bals, adj] = await Promise.all([
       sb.from('time_off_requests').select('*').eq('user_id', me()).order('start_date', { ascending: false }),
       compBalances(),
-      sb.from('comp_adjustments').select('*').eq('user_id', me()).order('created_at', { ascending: false })
+      sb.from('comp_adjustments').select('*').eq('user_id', me()).order('created_at', { ascending: false }),
+      isManager() ? null : loadDirectory().catch(() => [])   // names of who approved, for printouts
     ]);
     if (reqs.error) throw reqs.error;
     if (adj.error) throw adj.error;
@@ -1271,7 +1272,7 @@
         let action = '';
         if (mgr && r.status === 'pending' && canApproveTimeOff()) action = `<button class="btn small" data-to="${r.id}">Review</button>`;
         else if (mgr) action = `<button class="btn small" data-to="${r.id}">View</button>`;
-        else if (r.status === 'pending') action = `<button class="btn small" data-cancel="${r.id}">Cancel</button>`;
+        else action = `${r.status === 'pending' ? `<button class="btn small" data-cancel="${r.id}">Cancel</button> ` : ''}<button class="btn small" data-to="${r.id}">View</button>`;
         return `<tr class="${r.type === 'comp_earned' ? 'is-earned' : ''}">
           ${mgr ? `<td>${esc(personName(r.user_id, 'Unknown'))}</td>` : ''}
           <td>${esc(r.type === 'comp_earned' ? fmtDate(r.start_date) : dateRange(r.start_date, r.end_date))}</td>
@@ -1300,9 +1301,38 @@
     });
   }
 
+  // Printable one-page form for a time-off request or comp time earned
+  function timeOffSheetHTML(r) {
+    const earned = r.type === 'comp_earned';
+    const days = dayCount(r.start_date, r.end_date);
+    const decided = ['approved', 'denied'].includes(r.status) && r.reviewed_at;
+    const row = (label, value) => `<tr><th>${esc(label)}</th><td>${value}</td></tr>`;
+    return `<div class="sheet to-sheet">
+      <div class="sheet-head">
+        <div class="org">${esc(ORG)}</div>
+        <div class="title">${earned ? 'COMP TIME EARNED' : 'TIME-OFF REQUEST'}</div>
+        <div class="emp">${esc(personName(r.user_id, 'Employee').toUpperCase())}</div>
+      </div>
+      <table class="to-table"><tbody>
+        ${row('Type', esc(typeLabel(r.type)))}
+        ${row(earned ? 'Day worked' : 'Dates', esc(earned ? fmtDate(r.start_date) : dateRange(r.start_date, r.end_date)) + (earned ? '' : ` (${days} day${days > 1 ? 's' : ''})`))}
+        ${row('Hours', r.hours == null ? '—' : esc(hrs(r.hours)))}
+        ${row(earned ? 'What for' : 'Reason', esc(r.reason || '—'))}
+        ${row('Requested', esc(fmtDateTime(r.created_at)))}
+        ${row('Status', esc(r.status[0].toUpperCase() + r.status.slice(1)))}
+        ${decided ? row(r.status === 'approved' ? 'Approved by' : 'Denied by', `${esc(personName(r.reviewed_by, 'Manager'))} on ${esc(fmtDateTime(r.reviewed_at))}`) : ''}
+        ${r.manager_note ? row('Manager note', esc(r.manager_note)) : ''}
+      </tbody></table>
+      <div class="sheet-sign"><div class="sig-meta">Submitted electronically by ${esc(personName(r.user_id, 'the employee'))} through the Employee Portal on ${esc(fmtDateTime(r.created_at))}.${decided
+        ? ` ${r.status === 'approved' ? 'Approved' : 'Denied'} electronically on ${esc(fmtDateTime(r.reviewed_at))}.` : ' Not yet approved.'}</div></div>
+    </div>
+    <div class="sheet-after">Printed ${esc(new Date().toLocaleString())}</div>`;
+  }
+
   function openTimeOff(r) {
     openModal(`
-      <div class="doc">
+      <div class="print-area print-only"><div class="sheet-page">${timeOffSheetHTML(r)}</div></div>
+      <div class="doc no-print">
         <h2>${r.type === 'comp_earned' ? 'Comp time earned' : 'Time-off request'}</h2>
         <p><strong>${esc(personName(r.user_id, 'Employee'))}</strong> ${badge(r.status)}</p>
         <dl class="details">
@@ -1316,7 +1346,9 @@
         ${reviewInfo(r)}
       </div>
       ${r.status !== 'pending' || !isManager() ? '' : canApproveTimeOff() ? reviewControls('Deny')
-        : `<p class="notice">Waiting on ${esc(approverNames())} to approve or deny.</p>`}`);
+        : `<p class="notice no-print">Waiting on ${esc(approverNames())} to approve or deny.</p>`}
+      <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button></div>`);
+    $('#print-btn').onclick = () => window.print();
     if (r.status === 'pending' && canApproveTimeOff()) bindReview('time_off_requests', r.id, 'denied');
     if (isComp(r.type) && r.hours != null) {
       compBalances().then((list) => {
@@ -1331,22 +1363,40 @@
     }
   }
 
-  /* ---------------- manager: approvals ---------------- */
+  /* ---------------- manager: approvals (only what's waiting) ---------------- */
   views.review = async (el) => {
+    await loadPeople();
+    const [ts, to] = await Promise.all([
+      sb.from('timesheets').select('*').eq('status', 'submitted').order('period_start'),
+      sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date')
+    ]);
+    for (const r of [ts, to]) if (r.error) throw r.error;
+    el.innerHTML = `
+      <section class="card"><h2>Timesheets awaiting approval <span class="count">${ts.data.length}</span></h2>
+        <div id="ts-pending">${ts.data.length ? timesheetTable(ts.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>
+      <section class="card"><h2>Time off awaiting approval <span class="count">${to.data.length}</span></h2>
+        ${timeOffApprovers().length ? `<p class="hint">Approved or denied by ${esc(approverNames())}.</p>` : ''}
+        <div id="to-pending">${to.data.length ? timeOffTable(to.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>
+      <p class="hint">Approved and denied history, comp time balances and payroll are on <button class="btn-link" type="button" id="go-payroll">Payroll &amp; History</button>.</p>`;
+    bindTimesheetButtons($('#ts-pending'), ts.data);
+    bindTimeOffButtons($('#to-pending'), to.data);
+    $('#go-payroll').onclick = () => showView('payroll');
+  };
+
+  /* ---------------- manager: payroll & history ---------------- */
+  views.payroll = async (el) => {
     const people = await loadPeople();
     const who = state.people[state.filterUser] ? state.filterUser : '';
     state.filterUser = who;
     // When a person is picked, show only them and their full history
     const q = (table) => { let x = sb.from(table).select('*'); if (who) x = x.eq('user_id', who); return x; };
     const recent = (x) => who ? x : x.limit(25);
-    const [ts, to, tsDone, toDone, bals] = await Promise.all([
-      q('timesheets').eq('status', 'submitted').order('period_start'),
-      q('time_off_requests').eq('status', 'pending').order('start_date'),
+    const [tsDone, toDone, bals] = await Promise.all([
       recent(q('timesheets').neq('status', 'submitted').order('period_start', { ascending: false })),
       recent(q('time_off_requests').neq('status', 'pending').order('start_date', { ascending: false })),
       compBalances()
     ]);
-    for (const r of [ts, to, tsDone, toDone]) if (r.error) throw r.error;
+    for (const r of [tsDone, toDone]) if (r.error) throw r.error;
     const compRows = bals.filter((b) => (who ? b.user_id === who : b.active !== false));
     const forWho = who ? ` — ${esc(personName(who))}` : '';
 
@@ -1361,11 +1411,6 @@
         ${who ? '<button class="btn" id="f-clear">Show everyone</button>' : ''}
         <p class="hint">${who ? 'Showing all of this person’s timesheets and time off.' : 'Pick a person to see their full history. Tip: click the list and start typing a name.'}</p>
       </section>
-      <section class="card"><h2>Timesheets awaiting approval${forWho} <span class="count">${ts.data.length}</span></h2>
-        <div id="ts-pending">${timesheetTable(ts.data, true)}</div></section>
-      <section class="card"><h2>Time off awaiting approval${forWho} <span class="count">${to.data.length}</span></h2>
-        ${timeOffApprovers().length ? `<p class="hint">Approved or denied by ${esc(approverNames())}.</p>` : ''}
-        <div id="to-pending">${timeOffTable(to.data, true)}</div></section>
       <section class="card">
         <details class="fold" ${who ? 'open' : ''}>
           <summary><h2>Comp time balances${forWho}</h2></summary>
@@ -1394,12 +1439,10 @@
       <section class="card"><h2>${who ? 'All timesheets' + forWho : 'Recent timesheets'}</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div></section>
       <section class="card"><h2>${who ? 'All time off' + forWho : 'Recent time off'}</h2><div id="to-done">${timeOffTable(toDone.data, true)}</div></section>`;
 
-    $('#f-person').onchange = (e) => { state.filterUser = e.target.value; showView('review'); };
-    if (who) $('#f-clear').onclick = () => { state.filterUser = ''; showView('review'); };
+    $('#f-person').onchange = (e) => { state.filterUser = e.target.value; showView('payroll'); };
+    if (who) $('#f-clear').onclick = () => { state.filterUser = ''; showView('payroll'); };
 
-    bindTimesheetButtons($('#ts-pending'), ts.data);
     bindTimesheetButtons($('#ts-done'), tsDone.data);
-    bindTimeOffButtons($('#to-pending'), to.data);
     bindTimeOffButtons($('#to-done'), toDone.data);
 
     $('#comp-csv').onclick = () => downloadCSV(`comp-balances-${localToday()}.csv`, [
@@ -1432,7 +1475,7 @@
             if (error) throw error;
             closeModal();
             toast('Comp balance adjusted.');
-            showView('review');
+            showView('payroll');
           });
         };
       };
@@ -1547,7 +1590,7 @@
   const fromLocalInput = (date, time) => date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
   const multiline = (s) => esc(s || '').replace(/\n/g, '<br>');
   const EVENT_KINDS = [['training', 'Training'], ['court', 'Court'], ['holiday', 'Paid holiday'], ['other', 'Other']];
-  const kindLabel = (k) => (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1];
+  const kindLabel = (k) => (k === 'personal' ? 'My event' : (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1]);
   function peoplePicker(list, selected = new Set()) {
     return `<div class="picker-tools"><button type="button" class="btn small" data-pick="all">Select all</button><button type="button" class="btn small" data-pick="none">Clear</button><span class="hint picker-count"></span></div>
     <div class="people-picker">${list.filter((p) => p.active !== false).map((p) =>
@@ -1561,7 +1604,7 @@
     state.month = m;
     const gridStart = addDays(m, -m.getDay());                    // Sunday before the 1st
     const gridEnd = addDays(gridStart, 42);
-    const soonEnd = addDays(now, 45);
+    const soonEnd = addDays(now, 15);
     const today = isoDate(now);
 
     const [people, ann, monthEv, soonEv] = await Promise.all([
@@ -1580,7 +1623,7 @@
       if (error) throw error;
       data.forEach((t) => (tags[t.event_id] ||= []).push(t.user_id));
     }
-    const mine = (e) => (tags[e.id] || []).includes(me());
+    const mine = (e) => e.owner_id === me() || (tags[e.id] || []).includes(me());
     // Deputies only ever receive their own + "everyone" events (the database filters them).
     // Managers see all, and can switch to just their own.
     const justMine = isManager() && state.calMine;
@@ -1619,12 +1662,13 @@
             <button class="btn small" id="cal-next" aria-label="Next month">›</button>
             <button class="btn small" id="cal-today">Today</button>
           </div>
-          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
-          ${isManager() ? `<div class="cal-tools">
-            <div class="seg-toggle" role="group" aria-label="Whose events">
+          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="ev-dot ev-personal"></span>My events</span><span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
+          <div class="cal-tools">
+            ${isManager() ? `<div class="seg-toggle" role="group" aria-label="Whose events">
               <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
-            </div>
-            <button class="btn small primary" id="ev-new">Add event</button></div>` : ''}
+            </div>` : ''}
+            <button class="btn small${isManager() ? '' : ' primary'}" id="my-ev-new" title="A personal event only you can see">Add my event</button>
+            ${isManager() ? '<button class="btn small primary" id="ev-new">Add event</button>' : ''}</div>
         </div>
         <div class="cal-grid">
           ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="cal-dow">${d}</div>`).join('')}
@@ -1641,12 +1685,12 @@
       </section>
 
       <section class="card">
-        <h2>${isManager() && !state.calMine ? 'Coming up (next 45 days)' : 'Coming up for you (next 45 days)'}</h2>
-        ${isManager() ? '' : '<p class="hint">Your calendar shows your court dates, trainings and other events you’re on, plus anything for the whole office.</p>'}
+        <h2>${isManager() && !state.calMine ? 'Coming up (next 15 days)' : 'Coming up for you (next 15 days)'}</h2>
+        ${isManager() ? '' : '<p class="hint">Your calendar shows your court dates, trainings and other events you’re on, anything for the whole office, and your own events (only you can see those).</p>'}
         ${soonEv.data.length ? `<ul class="agenda">${soonEv.data.map((e) => `<li class="${mine(e) ? 'is-mine' : ''}">
             <button class="agenda-item" data-ev="${e.id}">
               <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
-              <span class="agenda-title">${esc(e.title)}${mine(e) ? ' <span class="tag tag-mine">You</span>' : ''}${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}</span>
+              <span class="agenda-title">${esc(e.title)}${mine(e) && !e.owner_id ? ' <span class="tag tag-mine">You</span>' : ''}${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}</span>
               <span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}${e.location ? ` · ${esc(e.location)}` : ''}</span>
             </button></li>`).join('')}</ul>` : '<p class="muted">Nothing scheduled.</p>'}
       </section>`;
@@ -1667,6 +1711,7 @@
     $('#cal-next').onclick = () => { state.month = new Date(m.getFullYear(), m.getMonth() + 1, 1); showView('calendar'); };
     $('#cal-today').onclick = () => { state.month = null; showView('calendar'); };
     $$('[data-calmine]', el).forEach((b) => { b.onclick = () => { state.calMine = b.dataset.calmine === '1'; showView('calendar'); }; });
+    $('#my-ev-new').onclick = () => editPersonal({ starts_at: fromLocalInput(today, '09:00') });
     if (isManager()) {
       $('#ann-new').onclick = () => editAnnouncement({ kind: 'general' });
       $('#ev-new').onclick = () => editEvent({ kind: 'court', starts_at: null }, [], people);
@@ -1680,15 +1725,17 @@
   function openDay(iso, evs, tags, people) {
     openModal(`<h2>${esc(fmtDate(iso))}</h2><ul class="agenda">${evs.map((e) => `<li>
       <button class="agenda-item" data-ev="${e.id}"><span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
-      <span class="agenda-title">${esc(e.title)}</span><span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</span></button></li>`).join('')}</ul>`);
+      <span class="agenda-title">${esc(e.title)}</span><span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</span></button></li>`).join('')}</ul>
+      <div class="actions"><button class="btn small" id="day-my-ev">Add my event this day</button></div>`);
     $$('#modal-body [data-ev]').forEach((b) => { b.onclick = () => openEvent(evs.find((e) => e.id === b.dataset.ev), tags[b.dataset.ev] || [], people); });
+    $('#day-my-ev').onclick = () => editPersonal({ starts_at: fromLocalInput(iso, '09:00') });
   }
 
   function openEvent(e, tagged, people) {
     const names = tagged.map(dirName).sort();
     openModal(`
       <div class="doc">
-        <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}
+        <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}${e.owner_id ? ' <span class="muted">Only you can see this.</span>' : ''}
         <h2 style="margin-top:.4rem">${esc(e.title)}</h2>
         <dl class="details">
           <dt>When</dt><dd>${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</dd>
@@ -1697,9 +1744,68 @@
           ${names.length ? `<dt>${e.kind === 'court' ? 'Deputies' : 'People'}</dt><dd>${names.map((n) => `<span class="chip ${tagged.includes(me()) && n === dirName(me()) ? '' : 'muted-chip'}">${esc(n)}</span>`).join(' ')}</dd>` : ''}
           ${e.details ? `<dt>Details</dt><dd>${multiline(e.details)}</dd>` : ''}
         </dl>
-        ${isManager() ? '<div class="actions"><button class="btn" id="ev-edit">Edit</button></div>' : ''}
+        ${(e.owner_id ? e.owner_id === me() : isManager()) ? '<div class="actions"><button class="btn" id="ev-edit">Edit</button></div>' : ''}
       </div>`);
-    if (isManager()) $('#ev-edit').onclick = () => editEvent(e, tagged, people);
+    $('#ev-edit')?.addEventListener('click', () => (e.owner_id ? editPersonal(e) : editEvent(e, tagged, people)));
+  }
+
+  // A personal event: only its owner can see it (the database enforces this). No emails.
+  function editPersonal(e) {
+    const [sd, st] = toLocalInput(e.starts_at);
+    const [ed, et] = toLocalInput(e.ends_at);
+    openModal(`
+      <h2>${e.id ? 'Edit my event' : 'Add my event'}</h2>
+      <p class="hint">Only you can see this. It’s for your own planning and doesn’t notify anyone.</p>
+      <form id="pe-form" autocomplete="off">
+        <label>Title<input name="title" required maxlength="200" value="${esc(e.title || '')}" placeholder="e.g. Dentist, Day off, Kid’s game"></label>
+        <label class="check"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
+        <div class="row">
+          <label>Date<input type="date" name="sd" required value="${sd}"></label>
+          <label class="time-f">Start time<input type="time" name="st" value="${e.all_day ? '' : st || '09:00'}"></label>
+          <label>End date<input type="date" name="ed" value="${e.id ? ed : ''}"></label>
+          <label class="time-f">End time<input type="time" name="et" value="${e.all_day ? '' : et}"></label>
+        </div>
+        <label>Location<input name="location" value="${esc(e.location || '')}"></label>
+        <label>Notes<textarea name="details" rows="3">${esc(e.details || '')}</textarea></label>
+        <div class="actions">
+          <button class="btn primary" type="submit">${e.id ? 'Save' : 'Add to my calendar'}</button>
+          ${e.id ? '<button class="btn danger" type="button" id="pe-del">Delete</button>' : ''}
+        </div>
+      </form>`);
+    const f = $('#pe-form');
+    const syncAllDay = () => { $$('.time-f', f).forEach((l) => l.classList.toggle('hidden', f.all_day.checked)); };
+    f.all_day.onchange = syncAllDay; syncAllDay();
+    f.onsubmit = (ev) => {
+      ev.preventDefault();
+      withBusy(f.querySelector('button[type=submit]'), async () => {
+        const allDay = f.all_day.checked;
+        const row = {
+          title: f.title.value.trim(), all_day: allDay,
+          starts_at: fromLocalInput(f.sd.value, allDay ? '00:00' : f.st.value),
+          ends_at: f.ed.value || (!allDay && f.et.value) ? fromLocalInput(f.ed.value || f.sd.value, allDay ? '23:59' : (f.et.value || f.st.value)) : null,
+          location: f.location.value.trim() || null, details: f.details.value.trim() || null
+        };
+        if (!row.title) throw new Error('Give it a title.');
+        if (row.ends_at && row.ends_at < row.starts_at) throw new Error('The end is before the start.');
+        const r = e.id
+          ? await sb.from('events').update({ ...row, updated_at: new Date().toISOString() }).eq('id', e.id)
+          : await sb.from('events').insert({ ...row, kind: 'personal', owner_id: me(), created_by: me() });
+        if (r.error) throw r.error;
+        closeModal();
+        toast(e.id ? 'Saved.' : 'Added to your calendar.');
+        showView('calendar');
+      });
+    };
+    $('#pe-del')?.addEventListener('click', (ev) => {
+      if (!confirm('Delete this event?')) return;
+      withBusy(ev.currentTarget, async () => {
+        const r = await sb.from('events').delete().eq('id', e.id);
+        if (r.error) throw r.error;
+        closeModal();
+        toast('Deleted.');
+        showView('calendar');
+      });
+    });
   }
 
   function editEvent(e, tagged, people) {
@@ -2644,7 +2750,7 @@
     const patrolText = (p) => p.patrol
       ? `<span>${p.shift ? esc(p.shift) + ' Shift' : '<span class="error-text">No shift</span>'}${p.reports_to ? ` · <span class="muted">${esc(nameOf(p.reports_to))}</span>` : ''}</span>`
       : '<span class="muted">—</span>';
-    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}${p.role === 'manager' && p.timeoff_approver ? ' <span class="chip muted-chip">Approves time off</span>' : ''}</span>`;
+    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}</span>`;
     const matches = (p) => {
       const q = tf.q.trim().toLowerCase();
       if (q && !`${p.full_name} ${p.email}`.toLowerCase().includes(q)) return false;

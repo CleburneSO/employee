@@ -84,10 +84,12 @@ create table if not exists public.events (
   updated_at timestamp with time zone,
   for_everyone boolean default false not null,
   holiday_hours numeric(4,2) default 8 not null,
+  owner_id uuid,
   constraint events_check CHECK (((ends_at IS NULL) OR (ends_at >= starts_at))),
   constraint events_created_by_fkey FOREIGN KEY (created_by) REFERENCES profiles(id),
   constraint events_holiday_hours_check CHECK (((holiday_hours >= (0)::numeric) AND (holiday_hours <= (24)::numeric))),
-  constraint events_kind_check CHECK ((kind = ANY (ARRAY['training'::text, 'court'::text, 'other'::text, 'holiday'::text]))),
+  constraint events_kind_check CHECK ((kind = ANY (ARRAY['training'::text, 'court'::text, 'other'::text, 'holiday'::text, 'personal'::text]))),
+  constraint events_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES profiles(id) ON DELETE CASCADE,
   constraint events_pkey PRIMARY KEY (id),
   constraint events_title_check CHECK ((length(TRIM(BOTH FROM title)) > 0))
 );
@@ -355,6 +357,11 @@ revoke all on public.app_secrets from anon, authenticated;
 -- Columns added after the tables were first created
 alter table public.profiles add column if not exists timeoff_approver boolean default false not null;
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
+-- Personal calendar events: owner_id set = only that person can see or change it
+alter table public.events add column if not exists owner_id uuid references public.profiles(id) on delete cascade;
+alter table public.events drop constraint if exists events_kind_check;
+alter table public.events add constraint events_kind_check
+  check (kind = any (array['training', 'court', 'other', 'holiday', 'personal']));
 
 -- ---------------------------------------------------------------- indexes
 
@@ -371,6 +378,7 @@ create index if not exists case_numbers_year_seq_idx ON public.case_numbers USIN
 create index if not exists comp_adjustments_user_idx ON public.comp_adjustments USING btree (user_id, created_at);
 
 create index if not exists events_starts_idx ON public.events USING btree (starts_at);
+create index if not exists events_owner_idx ON public.events USING btree (owner_id);
 
 create index if not exists offduty_jobs_starts_idx ON public.offduty_jobs USING btree (starts_at);
 
@@ -434,13 +442,16 @@ CREATE OR REPLACE FUNCTION public.can_see_event(p_event uuid)
  STABLE SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-  select public.is_manager()
-      or (public.is_active() and exists (
-            select 1 from public.events e
-            where e.id = p_event
-              and (e.for_everyone
-                   or exists (select 1 from public.event_people ep
-                              where ep.event_id = e.id and ep.user_id = auth.uid()))));
+  -- Personal events: only their owner. Office events: managers, plus the people on them
+  -- (or everyone, for "show to everyone").
+  select public.is_active() and exists (
+    select 1 from public.events e
+    where e.id = p_event
+      and case when e.owner_id is not null then e.owner_id = auth.uid()
+               else public.is_manager()
+                    or e.for_everyone
+                    or exists (select 1 from public.event_people ep
+                               where ep.event_id = e.id and ep.user_id = auth.uid()) end);
 $function$
 ;
 
@@ -1155,6 +1166,27 @@ begin
 end $function$
 ;
 
+-- Personal events stay personal: always type "personal", never shown to everyone,
+-- and an event can't be switched between personal and office.
+CREATE OR REPLACE FUNCTION public.events_personal_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  if tg_op = 'UPDATE' then
+    new.owner_id := old.owner_id;
+  end if;
+  if new.owner_id is not null then
+    new.kind := 'personal';
+    new.for_everyone := false;
+    new.holiday_hours := 8;
+  elsif new.kind = 'personal' then
+    raise exception 'Personal events belong to one person.';
+  end if;
+  return new;
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.export_db_setup()
  RETURNS text
  LANGUAGE plpgsql
@@ -1277,6 +1309,9 @@ CREATE TRIGGER case_numbers_guard BEFORE UPDATE ON public.case_numbers FOR EACH 
 drop trigger if exists comp_adjustments_guard on public.comp_adjustments;
 CREATE TRIGGER comp_adjustments_guard BEFORE INSERT ON public.comp_adjustments FOR EACH ROW EXECUTE FUNCTION public.comp_adjustments_guard();
 
+drop trigger if exists events_personal_guard on public.events;
+CREATE TRIGGER events_personal_guard BEFORE INSERT OR UPDATE ON public.events FOR EACH ROW EXECUTE FUNCTION public.events_personal_guard();
+
 drop trigger if exists events_holiday_guard on public.events;
 CREATE TRIGGER events_holiday_guard BEFORE INSERT OR UPDATE ON public.events FOR EACH ROW EXECUTE FUNCTION public.events_holiday_guard();
 
@@ -1341,13 +1376,16 @@ drop policy if exists duties_select on public.duties;
 create policy duties_select on public.duties as PERMISSIVE for SELECT to authenticated using (is_active());
 
 drop policy if exists event_people_manage on public.event_people;
-create policy event_people_manage on public.event_people as PERMISSIVE for ALL to authenticated using (is_manager()) with check (is_manager());
+create policy event_people_manage on public.event_people as PERMISSIVE for ALL to authenticated using ((is_manager() AND (EXISTS ( SELECT 1 FROM events e WHERE ((e.id = event_people.event_id) AND (e.owner_id IS NULL)))))) with check ((is_manager() AND (EXISTS ( SELECT 1 FROM events e WHERE ((e.id = event_people.event_id) AND (e.owner_id IS NULL))))));
 
 drop policy if exists event_people_select on public.event_people;
 create policy event_people_select on public.event_people as PERMISSIVE for SELECT to authenticated using (can_see_event(event_id));
 
 drop policy if exists events_manage on public.events;
-create policy events_manage on public.events as PERMISSIVE for ALL to authenticated using (is_manager()) with check (is_manager());
+create policy events_manage on public.events as PERMISSIVE for ALL to authenticated using ((is_manager() AND (owner_id IS NULL))) with check ((is_manager() AND (owner_id IS NULL)));
+
+drop policy if exists events_personal on public.events;
+create policy events_personal on public.events as PERMISSIVE for ALL to authenticated using (((owner_id = auth.uid()) AND is_active())) with check (((owner_id = auth.uid()) AND is_active()));
 
 drop policy if exists events_select on public.events;
 create policy events_select on public.events as PERMISSIVE for SELECT to authenticated using (can_see_event(id));

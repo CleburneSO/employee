@@ -209,6 +209,15 @@ table.extras td.num { text-align: left; padding-left: .9rem; }
 .sheet-after { max-width: 7.5in; margin: 4px auto 0; font: 9px Arial, sans-serif; color: #333; }
 .sheet-page + .sheet-page { margin-top: 1.5rem; }
 
+/* printable time-off / comp time form */
+.to-sheet .to-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.to-table th, .to-table td { border-top: 1px solid #000; padding: 9px 12px; text-align: left; vertical-align: top; }
+.to-table th { width: 28%; border-right: 1px solid #000; font-weight: 700; color: #000; background: none; text-transform: none; letter-spacing: 0; font-size: 14px; }
+.to-table td { overflow-wrap: anywhere; }
+.to-sheet .sheet-sign { padding: 10px 12px; }
+.to-sheet .sig-meta { font-size: 11px; }
+.print-only { display: none; }
+
 /* print: only the timesheet(s) in the open window */
 @page { size: letter; margin: 0.45in; }
 @media print {
@@ -217,6 +226,7 @@ table.extras td.num { text-align: left; padding-left: .9rem; }
   .modal { position: static; background: none; padding: 0; overflow: visible; display: block; }
   .modal-box { box-shadow: none; max-width: none; padding: 0; border-radius: 0; }
   .modal-close, .review, .no-print { display: none !important; }
+  .print-only { display: block; }
   .sheet { max-width: none; }
   .sheet-page { break-inside: avoid; page-break-inside: avoid; }
   .sheet-page + .sheet-page { margin-top: 0; break-before: page; page-break-before: always; }
@@ -553,6 +563,10 @@ table.audit-diff td:first-child { font-weight: 600; width: 22%; }
 .ev-holiday, .ev-dot.ev-holiday { background: #f3e3f5; border-color: #8e3a9d; color: #5b1f66; }
 .ev-dot.ev-holiday { background: #8e3a9d; }
 .tag-holiday { background: #f3e3f5; color: #5b1f66; }
+/* personal events (only the owner sees them) */
+.ev-personal, .ev-dot.ev-personal { background: #def0f3; border-color: #1f7a8c; color: #134d58; }
+.ev-dot.ev-personal { background: #1f7a8c; }
+.tag-personal { background: #def0f3; color: #134d58; }
 .holiday-note { background: #f7eef9; border-color: #e2c6e8; }
 
 /* calendar markers: solid colors + red dot for "you're on it" */
@@ -572,6 +586,7 @@ table.audit-diff td:first-child { font-weight: 600; width: 22%; }
   .ev-court { background: #d18a1d; }
   .ev-holiday { background: #8e3a9d; }
   .ev-other { background: #6c7a92; }
+  .ev-personal { background: #1f7a8c; }
 }
 
 /* ---- phone fixes for forms (iPhone date/time boxes have a built-in minimum width) ---- */
@@ -855,6 +870,9 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
   :root[data-theme="dark"] table.audit-diff { background: #222222; }
   :root[data-theme="dark"] .ev-holiday, :root[data-theme="dark"] .ev-dot.ev-holiday { background: #342336; color: #dab0e1; }
   :root[data-theme="dark"] .tag-holiday { background: #342336; color: #dab0e1; }
+  :root[data-theme="dark"] .ev-personal, :root[data-theme="dark"] .ev-dot.ev-personal { background: #18343a; color: #a9dbe4; }
+  :root[data-theme="dark"] .ev-dot.ev-personal { background: #1f7a8c; }
+  :root[data-theme="dark"] .tag-personal { background: #18343a; color: #a9dbe4; }
   :root[data-theme="dark"] .holiday-note { background: #2e2032; border-color: #533e58; }
   :root[data-theme="dark"] input[type="date"], :root[data-theme="dark"] input[type="time"] { background: #222222; }
   :root[data-theme="dark"] .stat-counter.auto { background: #2b2e22; }
