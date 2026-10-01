@@ -472,19 +472,36 @@
           <button id="signout" class="btn-link light">Sign out</button>
         </div>
       </header>
-      <div class="tabs-wrap"><nav class="tabs">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav></div>
+      <div class="tabs-wrap">
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="main-nav">
+          <span class="menu-icon" aria-hidden="true">☰</span><span class="menu-current"></span><span class="menu-caret" aria-hidden="true">▾</span>
+        </button>
+        <nav class="tabs" id="main-nav">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav>
+      </div>
       <main id="view"></main>`;
     $('#signout').onclick = () => sb.auth.signOut();
     bindThemeToggle();
     startIdleWatch();
-    $$('.tabs button').forEach((b) => { b.onclick = () => showView(b.dataset.view); });
+    $$('.tabs button').forEach((b) => { b.onclick = () => { setMenuOpen(false); showView(b.dataset.view); }; });
+    $('.menu-toggle').onclick = () => setMenuOpen(!$('.tabs-wrap').classList.contains('open'));
     showView(state.view);
   }
+
+  // Phone menu: the tab list drops down from the menu button; tap outside or Esc closes it
+  function setMenuOpen(open) {
+    const wrap = $('.tabs-wrap');
+    if (!wrap) return;
+    wrap.classList.toggle('open', open);
+    wrap.querySelector('.menu-toggle').setAttribute('aria-expanded', open);
+  }
+  document.addEventListener('click', (e) => { if (!e.target.closest('.tabs-wrap')) setMenuOpen(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenuOpen(false); });
 
   async function showView(v) {
     state.view = v;
     $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
-    $('.tabs button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    const cur = $('.menu-current');
+    if (cur) cur.textContent = $('.tabs button.active')?.textContent || '';
     const el = $('#view');
     el.innerHTML = '<div class="loading">Loading…</div>';
     try { await views[v](el); labelTables(el); }
