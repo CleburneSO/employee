@@ -14,8 +14,10 @@ window.APP_CONFIG = {
   // repo next to index.html with this exact name (case matters). '' = no logo.
   LOGO: 'logo.png',
 
-  // Pay periods: the first day of any one pay period, and how many days each lasts.
-  // 6/12/2025 + every 14 days (so 9/17/2026 – 9/30/2026 is a pay period).
-  PAY_PERIOD_START: '2025-09-17',
+  // Pay periods: the portal's first pay period, and how many days each lasts.
+  // Every pay period counts on from this date (9/17–9/30/2026, 10/1–10/14/2026, …);
+  // nothing earlier is offered. If you change these, also change FIRST_PERIOD /
+  // PERIOD_DAYS at the top of supabase-timesheet-reminder-function.ts.
+  FIRST_PAY_PERIOD: '2026-09-17',
   PAY_PERIOD_DAYS: 14
 };

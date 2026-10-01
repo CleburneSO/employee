@@ -1,0 +1,14 @@
+{
+  "name": "Cleburne County Sheriff's Office Employee Portal",
+  "short_name": "CCSO Portal",
+  "description": "Timesheets, time off, calendar, case numbers and off-duty jobs.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#41512c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

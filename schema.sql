@@ -226,6 +226,7 @@ create table if not exists public.offduty_requests (
   created_at timestamp with time zone default now() not null,
   decided_by uuid,
   decided_at timestamp with time zone,
+  managers_alerted_at timestamp with time zone,
   constraint offduty_requests_decided_by_fkey FOREIGN KEY (decided_by) REFERENCES profiles(id),
   constraint offduty_requests_job_id_fkey FOREIGN KEY (job_id) REFERENCES offduty_jobs(id) ON DELETE CASCADE,
   constraint offduty_requests_job_id_user_id_key UNIQUE (job_id, user_id),
@@ -344,6 +345,19 @@ create table if not exists public.timesheet_reminders (
 );
 alter table public.timesheet_reminders enable row level security;
 
+-- Day-before reminder emails already sent for calendar events (per person, per event time),
+-- so a reminder never goes twice. If an event is moved, the new time gets its own reminder.
+create table if not exists public.event_reminders (
+  event_id uuid not null,
+  user_id uuid not null,
+  starts_at timestamp with time zone not null,
+  sent_at timestamp with time zone default now() not null,
+  constraint event_reminders_pkey PRIMARY KEY (event_id, user_id, starts_at),
+  constraint event_reminders_event_id_fkey FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  constraint event_reminders_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+alter table public.event_reminders enable row level security;
+
 -- Server-only settings (e.g. the secret the daily reminder job uses). Row Level Security is on with
 -- no rules, so nobody can read this through the website; only Edge Functions and the SQL Editor can.
 create table if not exists public.app_secrets (
@@ -357,6 +371,8 @@ revoke all on public.app_secrets from anon, authenticated;
 -- Columns added after the tables were first created
 alter table public.profiles add column if not exists timeoff_approver boolean default false not null;
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
+-- When managers were emailed about an off-duty request (so it's only once per request)
+alter table public.offduty_requests add column if not exists managers_alerted_at timestamp with time zone;
 -- Personal calendar events: owner_id set = only that person can see or change it
 alter table public.events add column if not exists owner_id uuid references public.profiles(id) on delete cascade;
 alter table public.events drop constraint if exists events_kind_check;
@@ -1036,6 +1052,7 @@ begin
     new.user_id := auth.uid();
     new.status := 'requested';
     new.decided_by := null; new.decided_at := null; new.created_at := now();
+    new.managers_alerted_at := null;
     if j.status <> 'open' or j.starts_at < now() then
       raise exception 'This job is no longer taking requests.';
     end if;
@@ -1043,6 +1060,8 @@ begin
   end if;
 
   new.id := old.id; new.job_id := old.job_id; new.user_id := old.user_id; new.created_at := old.created_at;
+  -- Only the email function sets this; asking again after withdrawing allows one new email
+  new.managers_alerted_at := case when new.status = 'requested' and old.status <> 'requested' then null else old.managers_alerted_at end;
   if new.status = old.status then
     new.decided_by := old.decided_by; new.decided_at := old.decided_at;
     if old.user_id <> auth.uid() then new.note := old.note; end if;
@@ -1127,7 +1146,7 @@ declare
   diff jsonb := '{}'::jsonb;
   k text;
   -- noisy or huge fields that aren't worth storing
-  skip text[] := array['signature_data', 'updated_at', 'updated_by', 'approver_alerted_at'];
+  skip text[] := array['signature_data', 'updated_at', 'updated_by', 'approver_alerted_at', 'managers_alerted_at'];
 begin
   -- Reserving a case number bumps the counter by one; that's already logged as the new case number
   if tg_table_name = 'case_counters' and tg_op = 'UPDATE'

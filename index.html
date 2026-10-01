@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cleburne County Sheriff's Office — Employee Portal</title>
-  <link rel="stylesheet" href="style.css?v=20261001e">
+  <link rel="stylesheet" href="style.css?v=20261002a">
   <script>
     // Light / dark: the person's choice if they made one, otherwise their device's setting
     (function () {
@@ -14,7 +14,14 @@
     })();
   </script>
   <link rel="icon" href="seal.png">
-  <link rel="apple-touch-icon" href="seal.png">
+  <!-- Add to home screen: opens full-screen like an app, with the seal as its icon -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="CCSO Portal">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#41512c">
 </head>
 <body>
   <div id="app"><div class="loading">Loading…</div></div>
@@ -29,7 +36,7 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=20261001e"></script>
-  <script src="app.js?v=20261001e"></script>
+  <script src="config.js?v=20261002a"></script>
+  <script src="app.js?v=20261002a"></script>
 </body>
 </html>

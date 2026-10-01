@@ -73,6 +73,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - **Announcements** and **Training announcements** at the top (managers post, pin, set "show until", edit or delete).
 - A month **calendar**. Deputies see only **their own** events (the ones they're tagged on) plus anything marked **Show to everyone**; this is enforced by the database. Managers see all events and can switch to **Just mine**. When adding an event, managers tag deputies (**Select all** / **Clear** helpers) or tick **Show to everyone**. Your own events are outlined in red. On a phone, tap a day to see its events.
 - **Coming up**: the next 15 days as a list.
+- **Add to my calendar**: open any event and tap it to add it to the phone's or computer's calendar app (with its own reminder: 1 hour before, or 9 AM the day before for all-day events).
 - **My events**: anyone can tap **Add my event** (or tap a day → **Add my event this day**) for a personal event: dentist, day off, kid's game. Only that person sees it (not other deputies, not managers); it never sends email. The database enforces this.
 - **Paid holidays**: add an event with type **Paid holiday** (hours default to 8). It shows on everyone's calendar, and when anyone opens a timesheet for that pay period, **Total Holiday Hours** and that day's explanation are filled in automatically (editable before signing). Timesheets already submitted aren't changed.
 
@@ -99,7 +100,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - **Emails (required before inviting deputies):** Supabase's built-in email sender only delivers to members of your Supabase team, about 2 per hour, so invites to deputies fail until you connect your own sender under **Authentication → Emails → SMTP Settings** (e.g. Resend or your county email). Branded invite and password-reset emails are in `email-templates.html`: paste them into **Authentication → Emails → Templates**.
 - **E-signatures:** each timesheet stores the drawn signature image, typed name, a certification statement, and a server timestamp, and can't be altered after submission except by the employee re-signing. That covers what's typically expected for e-signatures under the U.S. ESIGN Act, but I'm not a lawyer — check your state's rules on timekeeping records and how long you must keep them.
 - **Backups:** export your tables from Supabase periodically (Table Editor → Export to CSV), especially on the free plan.
-- **Customizing:** time-off types live in both `schema.sql` (the `check` list) and `app.js` (`TIME_OFF_TYPES`) — change both together. Pay periods are set in `config.js` (`PAY_PERIOD_START` = the first day of any pay period, `PAY_PERIOD_DAYS` = 14). The printed header text is `COMPANY_NAME` and `REPORT_TITLE` in `config.js`.
+- **Customizing:** time-off types live in both `schema.sql` (the `check` list) and `app.js` (`TIME_OFF_TYPES`) — change both together. Pay periods are set in `config.js` (`FIRST_PAY_PERIOD` = the portal's first pay period, `PAY_PERIOD_DAYS` = 14); the timesheet reminder function has its own copy of both at the top of `supabase-timesheet-reminder-function.ts`, so change them there too. The printed header text is `COMPANY_NAME` and `REPORT_TITLE` in `config.js`.
 - **Upgrading from the first version:** run the new `schema.sql` again in the SQL Editor. It keeps your data and adds the new columns.
 - **Total Hours To Be Paid** = hours worked + vacation + holiday + sick + all special-duty hours. If payroll counts any of those differently, change the `total_paid_hours` line in `schema.sql` and the `paid` line in `app.js`.
 
@@ -121,9 +122,10 @@ The site emails people when something involves them:
 | When | Who gets it |
 |---|---|
 | Off-duty request approved / declined | That deputy |
-| Someone requests an off-duty job | Managers |
+| Someone requests an off-duty job | Managers (once per request; again only if they withdraw and ask again) |
 | New off-duty job posted ("Email everyone" box, on by default) | Everyone |
 | Added to a court date / training / event | Those deputies |
+| The afternoon before a court date / training / event they're tagged on | Those deputies |
 | An event they're on changes time or place, or is deleted | Those deputies |
 | New announcement ("Also email this to everyone" box, off by default) | Everyone |
 | Someone requests time off or logs comp time | The time-off approvers (see below) |
@@ -142,11 +144,20 @@ Setup (uses your Resend account, with ccsoportal.com verified):
 
 4. For timesheet reminders: **Deploy a new function** → **Via Editor** → name it **`timesheet-reminder`** → paste all of `supabase-timesheet-reminder-function.ts` → **Deploy**, then turn **off** "Verify JWT". Then run `timesheet-reminder.sql` in the **SQL Editor** (after `schema.sql`). That schedules a daily check at 13:00 UTC (8 AM Central in summer, 7 AM in winter). On the last day of each pay period, everyone active who hasn't submitted gets one reminder email. To see who would get one without sending anything, run `select public.run_timesheet_reminder(true);` and then `select content from net._http_response order by created desc limit 1;`.
 
+5. For court / training reminders: **Deploy a new function** → **Via Editor** → name it **`event-reminder`** → paste all of `supabase-event-reminder-function.ts` → **Deploy**, then turn **off** "Verify JWT". Then run `event-reminder.sql` in the **SQL Editor**. That schedules a daily check at 21:00 UTC (4 PM Central in summer, 3 PM in winter) that emails each deputy tagged on a court date, training or other event starting tomorrow. Dry run: `select public.run_event_reminder(true);` then `select content from net._http_response order by created desc limit 1;`.
+
 **Timesheet banner:** separately, anyone who hasn't submitted sees a banner at the top of the site on the last day of the pay period, and after it ends until they submit, with a **Fill it out** button.
 
 **Time-off approvers:** on the **Team** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
 
 If alerts aren't set up, everything still saves; the site shows a one-time note that the email couldn't be sent. Deactivated people never get emails.
+
+## Install on a phone
+
+The portal can sit on the home screen like an app (full screen, seal icon, "CCSO Portal"):
+- **iPhone:** open the site in Safari → Share button → **Add to Home Screen**.
+- **Android:** open it in Chrome → ⋮ menu → **Install app** (or **Add to Home screen**).
+People sign in once inside the installed app.
 
 ## Security features
 

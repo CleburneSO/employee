@@ -14,7 +14,7 @@
 //   select status_code, content from net._http_response order by created desc limit 1;
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
-// Must match the site: the first pay period and its length (FIRST_PAY_PERIOD / PAY_PERIOD_DAYS in app.js)
+// Must match the site: FIRST_PAY_PERIOD and PAY_PERIOD_DAYS in config.js
 const FIRST_PERIOD = '2026-09-17';
 const PERIOD_DAYS = 14;
 const TIME_ZONE = 'America/Chicago';

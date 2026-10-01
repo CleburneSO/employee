@@ -16,8 +16,8 @@
   const ORG = cfg.COMPANY_NAME || 'Employee Portal';
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   const PERIOD_DAYS = Number(cfg.PAY_PERIOD_DAYS) || 14;
-  // The portal's first pay period. Every pay period is counted in 14-day steps from this date,
-  // and nothing earlier is offered. (PAY_PERIOD_START in config.js is no longer used.)
+  // The portal's first pay period (FIRST_PAY_PERIOD in config.js). Every pay period is counted
+  // in PAY_PERIOD_DAYS steps from this date, and nothing earlier is offered.
   const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-09-17';
   const PERIOD_ANCHOR = FIRST_PERIOD;
   const LOGO = cfg.LOGO === undefined ? 'logo.png' : cfg.LOGO;   // '' = no logo
@@ -1778,9 +1778,45 @@
           ${names.length ? `<dt>${e.kind === 'court' ? 'Deputies' : 'People'}</dt><dd>${names.map((n) => `<span class="chip ${tagged.includes(me()) && n === dirName(me()) ? '' : 'muted-chip'}">${esc(n)}</span>`).join(' ')}</dd>` : ''}
           ${e.details ? `<dt>Details</dt><dd>${multiline(e.details)}</dd>` : ''}
         </dl>
-        ${(e.owner_id ? e.owner_id === me() : isManager()) ? '<div class="actions"><button class="btn" id="ev-edit">Edit</button></div>' : ''}
+        <div class="actions">
+          <button class="btn primary" id="ev-ics" type="button">Add to my calendar</button>
+          ${(e.owner_id ? e.owner_id === me() : isManager()) ? '<button class="btn" id="ev-edit">Edit</button>' : ''}
+        </div>
       </div>`);
+    $('#ev-ics').onclick = () => addToPhoneCalendar(e);
     $('#ev-edit')?.addEventListener('click', () => (e.owner_id ? editPersonal(e) : editEvent(e, tagged, people)));
+  }
+
+  // "Add to my calendar": a standard calendar file (.ics) that the phone's or computer's calendar
+  // app opens, with its own reminder (1 hour before; 9 AM the day before for all-day events).
+  function icsFor(e) {
+    const pad = (n) => String(n).padStart(2, '0');
+    const utc = (ts) => { const d = new Date(ts); return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`; };
+    const day = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+    const text = (v) => String(v || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+    const fold = (line) => { const out = []; let l = line; while (l.length > 60) { out.push(l.slice(0, 60)); l = ' ' + l.slice(60); } out.push(l); return out.join('\r\n'); };
+    const when = e.all_day
+      ? [`DTSTART;VALUE=DATE:${day(new Date(e.starts_at))}`, `DTEND;VALUE=DATE:${day(addDays(new Date(e.ends_at || e.starts_at), 1))}`]
+      : [`DTSTART:${utc(e.starts_at)}`, `DTEND:${utc(e.ends_at || new Date(new Date(e.starts_at).getTime() + 3600000))}`];
+    const title = e.kind === 'court' ? `Court: ${e.title}` : e.title;
+    return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//CCSO//Employee Portal//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+      'BEGIN:VEVENT', `UID:${e.id}@${location.hostname || 'ccsoportal.com'}`, `DTSTAMP:${utc(new Date())}`, ...when,
+      `SUMMARY:${text(title)}`, e.location ? `LOCATION:${text(e.location)}` : '', e.details ? `DESCRIPTION:${text(e.details)}` : '',
+      'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${text(title)}`, e.all_day ? 'TRIGGER:-PT15H' : 'TRIGGER:-PT1H', 'END:VALARM',
+      'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).map(fold).join('\r\n') + '\r\n';
+  }
+  function addToPhoneCalendar(e) {
+    const ics = icsFor(e);
+    // iPhone / iPad: Safari shows "Add to Calendar" for a calendar file it opens directly
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+      location.href = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(ics);
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+    a.download = `${(e.title || 'event').replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'event'}.ics`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
   // A personal event: only its owner can see it (the database enforces this). No emails.

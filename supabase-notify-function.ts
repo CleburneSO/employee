@@ -85,6 +85,7 @@ Deno.serve(async (req) => {
     };
 
     let to = [], subject = '', html = '';
+    let unclaim = null;   // if the email fails, let the next try send it
 
     if (type === 'offduty_decision') {
       mgrOnly();
@@ -100,8 +101,13 @@ Deno.serve(async (req) => {
         j.details ? esc(j.details).replace(/\n/g, '<br>') : ''
       ]);
     } else if (type === 'offduty_request') {
-      const { data: r } = await db.from('offduty_requests').select('*, offduty_jobs(*)').eq('id', id).single();
-      if (!r || r.user_id !== me.id || r.status !== 'requested') return json({ ok: true, sent: 0 });
+      // Only the person who asked, only while it's requested, and only once (marking it first
+      // means a second call sends nothing; withdrawing and asking again allows one new email)
+      const { data: r } = await db.from('offduty_requests').update({ managers_alerted_at: new Date().toISOString() })
+        .eq('id', id).eq('user_id', me.id).eq('status', 'requested').is('managers_alerted_at', null)
+        .select('*, offduty_jobs(*)').maybeSingle();
+      if (!r) return json({ ok: true, sent: 0 });
+      unclaim = () => db.from('offduty_requests').update({ managers_alerted_at: null }).eq('id', id);
       const j = r.offduty_jobs;
       to = await managers();
       subject = `Off-duty request: ${me.full_name} — ${j.title}`;
@@ -194,6 +200,7 @@ Deno.serve(async (req) => {
       if (!res.ok) {
         const detail = await res.text();
         console.error(`Resend refused the email (HTTP ${res.status}): ${detail}`);
+        if (unclaim && !sent) await unclaim();
         return json({ error: `Resend (HTTP ${res.status}): ${detail}`, sent }, 502);
       }
       sent += batch.length;
