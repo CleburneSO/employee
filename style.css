@@ -75,6 +75,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--gold); outl
 .submit-row { align-items: center; }
 .due-wrap { max-width: 1000px; margin: 1.25rem auto 0; padding: 0 1rem; }
 .due-wrap:empty { display: none; }
+.due-period { font-size: 1rem; margin: .9rem 0 .45rem; }
+.due-period:first-of-type { margin-top: 0; }
+.due-period .muted { font-weight: 400; font-size: .85rem; }
+.due-people { display: flex; flex-wrap: wrap; gap: .35rem; }
 .due-wrap .notice { margin: 0 0 .5rem; display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
 @media screen and (max-width: 760px) { .due-wrap { margin-top: .75rem; padding: 0 .6rem; } }
 label.check { display: flex; gap: .6rem; align-items: flex-start; font-weight: 400; }

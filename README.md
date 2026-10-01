@@ -90,7 +90,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 
 **Managers**
 - The manager pages are under the **Admin** tab (a drop-down on a computer, an "Admin" section in the ☰ menu on a phone): Approvals, Payroll & History, Team, and Audit Log for the site owner. Admin and Approvals show how many items are waiting.
-- *Approvals:* only what's waiting: pending timesheets and time off. Approve or send back / deny with a note. Open any timesheet, time-off request or comp time entry and click **Print / Save PDF** for a paper copy (employees can print their own too).
+- *Approvals:* only what's waiting: who **hasn't submitted a timesheet** (on the last day of a pay period, and after it until everyone's in), pending timesheets and time off. Approve or send back / deny with a note. Open any timesheet, time-off request or comp time entry and click **Print / Save PDF** for a paper copy (employees can print their own too).
 - *Payroll & History:* comp time balances (and adjustments), payroll (pick a pay period and **Print all timesheets**, one page per deputy, or download a CSV), and the approved / denied history of timesheets and time off. Pick a person to see their full history.
 - *Team:* edit names and roles, **Deactivate** people who leave (they're locked out immediately; their records are kept and still searchable; don't delete them in Supabase), and tick which **special duties** each person has. Below that, manage the duty list: short name (K9), the line printed on the timesheet, the small-print note, optional **auto hours** pre-filled each pay period, **Everyone** (show on all timesheets), and **Active** (turn off to retire a duty; old timesheets keep it). It starts with Traffic OT, K9, DEA and Supervisor. Rename or edit them to match your wording.
 
@@ -122,7 +122,7 @@ The site emails people when something involves them:
 | When | Who gets it |
 |---|---|
 | Off-duty request approved / declined | That deputy |
-| Someone requests an off-duty job | Managers (once per request; again only if they withdraw and ask again) |
+| Someone requests an off-duty job | The time-off approvers, e.g. the sheriff and chief deputy (once per request; again only if they withdraw and ask again) |
 | New off-duty job posted ("Email everyone" box, on by default) | Everyone |
 | Added to a court date / training / event | Those deputies |
 | The afternoon before a court date / training / event they're tagged on | Those deputies |
@@ -148,7 +148,7 @@ Setup (uses your Resend account, with ccsoportal.com verified):
 
 **Timesheet banner:** separately, anyone who hasn't submitted sees a banner at the top of the site on the last day of the pay period, and after it ends until they submit, with a **Fill it out** button.
 
-**Time-off approvers:** on the **Team** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
+**Time-off approvers:** on the **Team** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request and every off-duty job request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
 
 If alerts aren't set up, everything still saves; the site shows a one-time note that the email couldn't be sent. Deactivated people never get emails.
 

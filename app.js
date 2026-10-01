@@ -1399,13 +1399,30 @@
 
   /* ---------------- manager: approvals (only what's waiting) ---------------- */
   views.review = async (el) => {
-    await loadPeople();
-    const [ts, to] = await Promise.all([
+    const people = await loadPeople();
+    // Who still owes a timesheet: last pay period (once it's over), and the current one on its last day
+    const cur = currentPeriod(), prev = previousPeriod(), today = isoDate(new Date());
+    const due = [...(prev !== cur ? [prev] : []), ...(periodEnd(cur) === today ? [cur] : [])];
+    const [ts, to, dueTs] = await Promise.all([
       sb.from('timesheets').select('*').eq('status', 'submitted').order('period_start'),
-      sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date')
+      sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date'),
+      due.length ? sb.from('timesheets').select('user_id, period_start, status').in('period_start', due) : { data: [] }
     ]);
-    for (const r of [ts, to]) if (r.error) throw r.error;
+    for (const r of [ts, to, dueTs]) if (r.error) throw r.error;
+    const missing = due.map((p) => {
+      const status = Object.fromEntries(dueTs.data.filter((t) => t.period_start === p).map((t) => [t.user_id, t.status]));
+      const joinedBy = (x) => !x.created_at || isoDate(new Date(x.created_at)) <= periodEnd(p);   // not people who started after it
+      const list = people.filter((x) => x.active !== false && joinedBy(x) && !['submitted', 'approved'].includes(status[x.id]))
+        .map((x) => ({ ...x, sentBack: status[x.id] === 'rejected' }));
+      return { p, list };
+    }).filter((g) => g.list.length);
+    const missingCount = missing.reduce((n, g) => n + g.list.length, 0);
     el.innerHTML = `
+      ${missingCount ? `<section class="card"><h2>Haven’t submitted a timesheet <span class="count">${missingCount}</span></h2>
+        ${missing.map(({ p, list }) => `<h3 class="due-period">${esc(periodLabel(p))} <span class="muted">${periodEnd(p) === today ? 'due today' : `was due ${esc(fmtShort(periodEnd(p)))}`}</span></h3>
+          <div class="due-people">${list.map((x) => `<span class="chip ${x.sentBack ? '' : 'muted-chip'}" title="${x.sentBack ? 'Sent back, not resubmitted yet' : 'Not submitted'}">${esc(x.full_name || x.email)}${x.sentBack ? ' (sent back)' : ''}</span>`).join(' ')}</div>`).join('')}
+        <p class="hint">Each of them also gets an automatic reminder email the morning of the last day, and sees a banner when they sign in.</p>
+      </section>` : ''}
       <section class="card"><h2>Timesheets awaiting approval <span class="count">${ts.data.length}</span></h2>
         <div id="ts-pending">${ts.data.length ? timesheetTable(ts.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>
       <section class="card"><h2>Time off awaiting approval <span class="count">${to.data.length}</span></h2>
@@ -2958,7 +2975,7 @@
 
           ${'timeoff_approver' in p ? `<fieldset class="person-set">
             <legend>Time off</legend>
-            <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''}> <span><strong>Approves time off</strong> — gets an email for every time-off request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.</span></label>
+            <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.</span></label>
           </fieldset>` : ''}
 
           <fieldset class="person-set">

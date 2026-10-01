@@ -79,9 +79,13 @@ Deno.serve(async (req) => {
       const { data } = await db.from('profiles').select('id, full_name, email, active').eq('active', true);
       return (data || []).filter((p) => p.email);
     };
-    const managers = async () => {
-      const { data } = await db.from('profiles').select('id, full_name, email, active').eq('role', 'manager').eq('active', true);
-      return (data || []).filter((p) => p.email);
+    // The sheriff and chief deputy: managers ticked "Approves time off" on the Team tab.
+    // If nobody is ticked, every manager, so nothing gets missed.
+    const approvers = async () => {
+      const { data } = await db.from('profiles').select('id, full_name, email, active, timeoff_approver').eq('role', 'manager').eq('active', true);
+      const all = (data || []).filter((p) => p.email);
+      const ticked = all.filter((p) => p.timeoff_approver);
+      return ticked.length ? ticked : all;
     };
 
     let to = [], subject = '', html = '';
@@ -109,7 +113,7 @@ Deno.serve(async (req) => {
       if (!r) return json({ ok: true, sent: 0 });
       unclaim = () => db.from('offduty_requests').update({ managers_alerted_at: null }).eq('id', id);
       const j = r.offduty_jobs;
-      to = await managers();
+      to = await approvers();
       subject = `Off-duty request: ${me.full_name} — ${j.title}`;
       html = page(SITE, 'New off-duty job request', [
         `<strong>${esc(me.full_name)}</strong> requested <strong>${esc(j.title)}</strong>.`,
