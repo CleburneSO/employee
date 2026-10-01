@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #f4f5f7;
   --card: #fff;
   --text: #1d2330;
@@ -781,3 +782,98 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
   .case-sheet td.sm { font-size: 11px; }
   .case-sheet th { font-size: 13px; padding-bottom: 3px; }
 }
+
+/* ===== DARK MODE (generated) ===== */
+@media screen {
+  :root[data-theme="dark"] { color-scheme: dark; --bg: #121418; --card: #1b1f25; --text: #e4e7ec; --muted: #9ba4b3; --line: #2c323b;
+    --primary: #a3bd7c; --primary-dark: #3a4a27; --danger: #f07a7a; --ok: #5fcf92; --warn: #e5b05a; }
+  :root[data-theme="dark"] code { background: #26292e; }
+  :root[data-theme="dark"] .topbar { background: #222222; }
+  :root[data-theme="dark"] .role { background: #30352a; }
+  :root[data-theme="dark"] .tabs { background: #222222; }
+  :root[data-theme="dark"] input, :root[data-theme="dark"] select, :root[data-theme="dark"] textarea { border: 1px solid #474b50; background: #222222; }
+  :root[data-theme="dark"] .btn { border: 1px solid #474b50; background: #222222; }
+  :root[data-theme="dark"] .btn:hover { background: #23252a; }
+  :root[data-theme="dark"] .btn.danger { background: #222222; }
+  :root[data-theme="dark"] .badge { background: #26292e; }
+  :root[data-theme="dark"] .badge-submitted, :root[data-theme="dark"] .badge-pending { background: #3f311b; }
+  :root[data-theme="dark"] .badge-approved { background: #253a2e; }
+  :root[data-theme="dark"] .badge-rejected, :root[data-theme="dark"] .badge-denied { background: #3a1d1d; }
+  :root[data-theme="dark"] .notice { background: #2b3024; border: 1px solid #4e5644; }
+  :root[data-theme="dark"] .modal-box { background: #222222; }
+  :root[data-theme="dark"] .notice.warn { background: #3c2f17; border-color: #6a5938; }
+  :root[data-theme="dark"] .sign-statement { color: #f47c7c; }
+  :root[data-theme="dark"] .chip { background: #4a401c; color: #f7d7a0; border: 1px solid #77693d; }
+  :root[data-theme="dark"] .chip.muted-chip { background: #26292e; border-color: #42464d; }
+  :root[data-theme="dark"] tr.new-duty td { background: #141c35; }
+  :root[data-theme="dark"] table.extras tr.duty-row th, :root[data-theme="dark"] table.extras tr.duty-row td { background: #382c15; }
+  :root[data-theme="dark"] table.extras tr.duty-row.has-hours th, :root[data-theme="dark"] table.extras tr.duty-row.has-hours td { background: #4a401c; }
+  :root[data-theme="dark"] .count.muted-count { background: #575b61; }
+  :root[data-theme="dark"] .case-result { background: #382c15; }
+  :root[data-theme="dark"] .ann { border-left: 4px solid #51574b; }
+  :root[data-theme="dark"] .ann.pinned { background: #362c14; }
+  :root[data-theme="dark"] .tag { background: #26292e; }
+  :root[data-theme="dark"] .tag-training { background: #343a2b; }
+  :root[data-theme="dark"] .tag-court { background: #4a401c; color: #f7d7a0; }
+  :root[data-theme="dark"] .tag-other { background: #242a33; color: #b5becf; }
+  :root[data-theme="dark"] .tag-danger { background: #3a1d1d; }
+  :root[data-theme="dark"] .cal-dow { background: #212529; }
+  :root[data-theme="dark"] .cal-day.other-month { background: #212529; }
+  :root[data-theme="dark"] .ev-training, :root[data-theme="dark"] .ev-dot.ev-training { background: #343a2b; color: #d6e0ca; }
+  :root[data-theme="dark"] .ev-court, :root[data-theme="dark"] .ev-dot.ev-court { background: #4a401c; color: #f8daa8; }
+  :root[data-theme="dark"] .ev-other, :root[data-theme="dark"] .ev-dot.ev-other { background: #242a33; color: #c4cbd8; }
+  :root[data-theme="dark"] .ev-dot.ev-mine { background: #222222; }
+  :root[data-theme="dark"] .agenda li.is-mine { background: #351414; }
+  :root[data-theme="dark"] .job-requests { background: #212529; }
+  :root[data-theme="dark"] .job-requests.muted-block { background: #292f23; }
+  :root[data-theme="dark"] .tabs-wrap { background: #222222; }
+  :root[data-theme="dark"] table.entry tr.seg-first + tr.seg-extra, :root[data-theme="dark"] table.entry tr.seg-extra + tr.seg-extra { background: #212529; }
+  :root[data-theme="dark"] table.entry tr.is-duty td { background: #3e3418; }
+  :root[data-theme="dark"] table.entry tr.is-duty .t-hours::after { color: #e9c787; }
+  :root[data-theme="dark"] .auto-note { color: #f7d7a0; }
+  :root[data-theme="dark"] tr.from-times input.duty-input { background: #26272b; }
+  :root[data-theme="dark"] .seg-toggle { border: 1px solid #474b50; }
+  :root[data-theme="dark"] .seg-toggle button { background: #222222; }
+  :root[data-theme="dark"] .idle-box { background: #222222; }
+  :root[data-theme="dark"] .tag-insert { background: #253a2e; }
+  :root[data-theme="dark"] .tag-update { background: #242a33; color: #b5becf; }
+  :root[data-theme="dark"] .tag-delete { background: #3a1d1d; }
+  :root[data-theme="dark"] tr.audit-detail > td { background: #212529; }
+  :root[data-theme="dark"] table.audit-diff { background: #222222; }
+  :root[data-theme="dark"] .ev-holiday, :root[data-theme="dark"] .ev-dot.ev-holiday { background: #342336; color: #dab0e1; }
+  :root[data-theme="dark"] .tag-holiday { background: #342336; color: #dab0e1; }
+  :root[data-theme="dark"] .holiday-note { background: #2e2032; border-color: #533e58; }
+  :root[data-theme="dark"] input[type="date"], :root[data-theme="dark"] input[type="time"] { background: #222222; }
+  :root[data-theme="dark"] .stat-counter.auto { background: #2b2e22; }
+  :root[data-theme="dark"] .auto-tag { background: #353a2b; }
+  :root[data-theme="dark"] table.list tr.is-me td { background: #3c2f17; }
+  :root[data-theme="dark"] table.entry .add-seg, :root[data-theme="dark"] table.entry .del-seg { border: 1px solid #474b50; background: #222222; }
+  :root[data-theme="dark"] table.entry .add-seg:hover { background: #2b3024; }
+  :root[data-theme="dark"] table.list tr.is-earned td { background: #2b3221; }
+  :root[data-theme="dark"] table.extras tr.duty-row.unpaid th, :root[data-theme="dark"] table.extras tr.duty-row.unpaid td { background: #212931; }
+  :root[data-theme="dark"] table.extras tr.duty-row.unpaid.has-hours th, :root[data-theme="dark"] table.extras tr.duty-row.unpaid.has-hours td { background: #252f39; }
+  :root[data-theme="dark"] .usual-bar { background: #2b2e22; border: 1px solid #4c5241; }
+  @media screen and (max-width: 760px) {
+    :root[data-theme="dark"] .tabs-wrap::after { background: linear-gradient(to right, rgba(255,255,255,0), #222222); }
+    :root[data-theme="dark"] table.entry tr.is-duty { background: #3e3418; }
+    :root[data-theme="dark"] table.list tr { background: #222222; }
+    :root[data-theme="dark"] table.list tr.is-void { background: #212529; }
+    :root[data-theme="dark"] table.list tr.audit-detail { background: #212529; }
+  }
+  /* solid green fills keep the dark brand green with white text */
+  :root[data-theme="dark"] .btn.primary, :root[data-theme="dark"] .count:not(.muted-count), :root[data-theme="dark"] .cal-day.is-today .cal-num,
+  :root[data-theme="dark"] .seg-toggle button.on { background: #4d6334; border-color: #4d6334; color: #fff; }
+  :root[data-theme="dark"] .btn.primary:hover { background: #5b7540; }
+  :root[data-theme="dark"] .btn.danger { background: transparent; }
+  /* logo sits on a white plate so the green lettering stays readable */
+  :root[data-theme="dark"] .brand-logo, :root[data-theme="dark"] .auth-logo { background: #fff; border-radius: 8px; padding: 3px 8px; }
+  /* the printable timesheet / case log preview stays paper-white */
+  :root[data-theme="dark"] .sheet, :root[data-theme="dark"] .case-sheet { background: #fff; color: #000; }
+  :root[data-theme="dark"] .modal { background: rgba(0,0,0,.65); }
+  :root[data-theme="dark"] ::placeholder { color: #6f7887; }
+  .theme-toggle { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 99px; width: 2rem; height: 2rem;
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0; }
+  .theme-toggle:hover { border-color: var(--gold); }
+}
+@media print { .theme-toggle { display: none !important; } }
+/* ===== END DARK MODE ===== */
