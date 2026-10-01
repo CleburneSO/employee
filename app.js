@@ -429,6 +429,29 @@
     };
   }
 
+  /* ---------------- light / dark ---------------- */
+  const THEME_KEY = 'portal_theme';
+  const savedTheme = () => { try { const t = localStorage.getItem(THEME_KEY); return t === 'dark' || t === 'light' ? t : null; } catch (_) { return null; } };
+  const deviceTheme = () => (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const currentTheme = () => document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  function setTheme(t, save) {
+    document.documentElement.setAttribute('data-theme', t);
+    if (save) { try { localStorage.setItem(THEME_KEY, t); } catch (_) { /* private mode */ } }
+    const b = $('#theme-toggle');
+    if (b) {
+      b.textContent = t === 'dark' ? '☀' : '☾';
+      b.title = b.ariaLabel = t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    }
+  }
+  function bindThemeToggle() {
+    setTheme(currentTheme(), false);
+    $('#theme-toggle').onclick = () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark', true);
+  }
+  // Set the theme right away (in case an older index.html without the early script is cached)
+  setTheme(savedTheme() || deviceTheme(), false);
+  // Until someone picks, follow the device as it switches between light and dark
+  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (!savedTheme()) setTheme(deviceTheme(), false); });
+
   /* ---------------- app shell ---------------- */
   const views = {};
 
@@ -445,12 +468,14 @@
         <div class="user">
           <span>${esc(state.profile.full_name)}</span>
           <span class="role">${esc(state.profile.role)}</span>
+          <button id="theme-toggle" class="theme-toggle" type="button"></button>
           <button id="signout" class="btn-link light">Sign out</button>
         </div>
       </header>
       <div class="tabs-wrap"><nav class="tabs">${tabs.map(([k, l]) => `<button data-view="${k}">${l}</button>`).join('')}</nav></div>
       <main id="view"></main>`;
     $('#signout').onclick = () => sb.auth.signOut();
+    bindThemeToggle();
     startIdleWatch();
     $$('.tabs button').forEach((b) => { b.onclick = () => showView(b.dataset.view); });
     showView(state.view);
