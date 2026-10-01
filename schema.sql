@@ -982,6 +982,7 @@ end $function$
 CREATE OR REPLACE FUNCTION public.events_holiday_guard()
  RETURNS trigger
  LANGUAGE plpgsql
+ SET search_path TO 'public'
 AS $function$
 begin
   if new.kind = 'holiday' then
@@ -1253,6 +1254,7 @@ end $function$
 CREATE OR REPLACE FUNCTION public.events_personal_guard()
  RETURNS trigger
  LANGUAGE plpgsql
+ SET search_path TO 'public'
 AS $function$
 begin
   if tg_op = 'UPDATE' then
@@ -1328,6 +1330,7 @@ end $function$
 CREATE OR REPLACE FUNCTION public.timesheet_drafts_touch()
  RETURNS trigger
  LANGUAGE plpgsql
+ SET search_path TO 'public'
 AS $function$
 begin
   new.updated_at := now();   -- server time, so it compares with signed_at
@@ -1366,6 +1369,7 @@ CREATE OR REPLACE FUNCTION public.uniform_allowance()
  RETURNS numeric
  LANGUAGE sql
  IMMUTABLE
+ SET search_path TO 'public'
 AS $function$
   select 500.00::numeric;
 $function$
@@ -1376,6 +1380,7 @@ CREATE OR REPLACE FUNCTION public.uniform_fy_start(d date)
  RETURNS date
  LANGUAGE sql
  IMMUTABLE
+ SET search_path TO 'public'
 AS $function$
   select case when extract(month from d) >= 10 then make_date(extract(year from d)::int, 10, 1)
               else make_date(extract(year from d)::int - 1, 10, 1) end;
@@ -1386,6 +1391,7 @@ CREATE OR REPLACE FUNCTION public.uniform_current_fy()
  RETURNS date
  LANGUAGE sql
  STABLE
+ SET search_path TO 'public'
 AS $function$
   select public.uniform_fy_start((now() at time zone 'America/Chicago')::date);
 $function$
@@ -1556,6 +1562,22 @@ end $function$
 
 -- Functions in the public schema can be called by anyone through the API
 -- unless execute is revoked. These are only for use inside other functions.
+-- Who can call what. Signed-out visitors can't call any of these. Signed-in users can call only
+-- what the site uses (each checks permissions itself) and the helpers the security rules use;
+-- the guard / trigger functions run automatically and aren't callable through the API.
+revoke execute on all functions in schema public from public, anon;
+revoke execute on function public.audit_trigger(), public.case_numbers_guard(), public.comp_adjustments_guard(),
+  public.events_holiday_guard(), public.events_personal_guard(), public.handle_new_user(),
+  public.offduty_requests_guard(), public.patrol_stats_guard(), public.profiles_guard(), public.profiles_owner_lock(),
+  public.time_off_guard(), public.timesheet_drafts_touch(), public.timesheets_guard(),
+  public.uniform_adjustments_guard(), public.uniform_orders_guard(),
+  public.uniform_allowance(), public.uniform_fy_start(date), public.uniform_current_fy()
+  from authenticated;
+grant execute on function public.is_active(), public.is_manager(), public.is_owner(), public.is_timeoff_approver(),
+  public.can_see_event(uuid), public.can_see_stats_of(uuid),
+  public.comp_balances(), public.people_directory(), public.patrol_stats_month(date), public.patrol_shift_totals(date),
+  public.reserve_case_number(date, text, text, text, text), public.set_next_case_seq(integer, integer)
+  to authenticated;
 revoke execute on function public.patrol_month_facts(date) from public, anon, authenticated;
 revoke execute on function public.calendar_ticket(text, uuid) from public, anon;
 revoke execute on function public.uniform_sums(uuid, date, uuid) from public, anon, authenticated;
