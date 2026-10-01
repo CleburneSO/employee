@@ -2548,6 +2548,147 @@
       `<tr><td>${esc(FIELD_LABELS[k] || k)}</td><td>${auditValue(c[k])}</td></tr>`).join('')}</tbody></table>`;
   }
 
+  /* ---------------- owner: download all records (.zip of CSVs) ---------------- */
+  // Each table, read 1000 rows at a time in a fixed order so nothing is skipped or repeated
+  const BACKUP_TABLES = [
+    ['profiles', ['id']], ['timesheets', ['id']], ['time_off_requests', ['id']], ['comp_adjustments', ['id']],
+    ['case_numbers', ['id']], ['case_counters', ['year']], ['patrol_stats', ['id']],
+    ['offduty_jobs', ['id']], ['offduty_requests', ['id']], ['events', ['id']], ['event_people', ['event_id', 'user_id']],
+    ['announcements', ['id']], ['duties', ['id']], ['profile_duties', ['user_id', 'duty_id']], ['audit_log', ['id']]
+  ];
+  async function fetchAllRows(table, keys) {
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      let q = sb.from(table).select('*');
+      keys.forEach((k) => { q = q.order(k); });
+      const { data, error } = await q.range(from, from + 999);
+      if (error) throw new Error(`Couldn’t read ${table}: ${error.message}`);
+      rows.push(...data);
+      if (data.length < 1000) return rows;
+    }
+  }
+  // CSV that Excel opens cleanly: UTF-8 marker, quoted cells, and text that starts like a
+  // formula (=, +, -, @) is made harmless so opening the file never runs anything
+  function toCSV(rows, cols) {
+    if (!rows.length) return '';
+    cols = cols || [...new Set(rows.flatMap((r) => Object.keys(r)))];
+    const cell = (v) => {
+      if (v == null) return '';
+      let x = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      if (typeof v === 'string' && /^[=+\-@\t\r]/.test(x) && !/^-?\d+(\.\d+)?$/.test(x)) x = `'${x}`;
+      return /[",\n\r]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
+    };
+    return '\ufeff' + [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\r\n');
+  }
+  // Put a readable name column right after an id column
+  function withNames(rows, idCol, nameCol, names) {
+    return rows.map((r) => {
+      if (!(idCol in r)) return r;
+      const out = {};
+      for (const [k, v] of Object.entries(r)) { out[k] = v; if (k === idCol) out[nameCol] = names[v] || ''; }
+      return out;
+    });
+  }
+  // Minimal .zip writer (files stored as-is, no compression)
+  const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = (b) => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  function makeZip(files) {
+    const enc = new TextEncoder(), now = new Date();
+    const time = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+    const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    const parts = [], central = [];
+    let offset = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), data = typeof f.data === 'string' ? enc.encode(f.data) : f.data, crc = crc32(data);
+      const head = new DataView(new ArrayBuffer(30));
+      [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, time, 2], [12, date, 2], [14, crc, 4],
+        [18, data.length, 4], [22, data.length, 4], [26, name.length, 2], [28, 0, 2]]
+        .forEach(([o, v, n]) => (n === 4 ? head.setUint32(o, v, true) : head.setUint16(o, v, true)));
+      const dir = new DataView(new ArrayBuffer(46));
+      [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, time, 2], [14, date, 2], [16, crc, 4],
+        [20, data.length, 4], [24, data.length, 4], [28, name.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, offset, 4]]
+        .forEach(([o, v, n]) => (n === 4 ? dir.setUint32(o, v, true) : dir.setUint16(o, v, true)));
+      parts.push(head, name, data);
+      central.push(dir, name);
+      offset += 30 + name.length + data.length;
+    }
+    const size = central.reduce((a, x) => a + x.byteLength, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, files.length, 2], [10, files.length, 2], [12, size, 4], [16, offset, 4], [20, 0, 2]]
+      .forEach(([o, v, n]) => (n === 4 ? end.setUint32(o, v, true) : end.setUint16(o, v, true)));
+    return new Blob([...parts, ...central, end], { type: 'application/zip' });
+  }
+  async function downloadAllRecords(progress) {
+    const data = {};
+    for (const [i, [table, keys]] of BACKUP_TABLES.entries()) {
+      progress(`Reading ${table.replace(/_/g, ' ')} (${i + 1} of ${BACKUP_TABLES.length})…`);
+      data[table] = await fetchAllRows(table, keys);
+    }
+    progress('Building the file…');
+    const names = Object.fromEntries(data.profiles.map((p) => [p.id, p.full_name || p.email || '']));
+    const duties = Object.fromEntries(data.duties.map((d) => [d.id, d.name]));
+    const slug = (x) => String(x || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const files = [];
+
+    // Signatures as image files; the timesheet sheet names the file
+    const sheets = data.timesheets.map((t) => {
+      const r = { ...t };
+      const m = /^data:image\/png;base64,(.+)$/.exec(t.signature_data || '');
+      if (m) {
+        const path = `signatures/${t.period_start}_${slug(names[t.user_id])}_${String(t.id).slice(0, 8)}.png`;
+        files.push({ name: path, data: Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0)) });
+        r.signature_data = path;
+      }
+      return r;
+    });
+    // One row per block of time, easier to read than the raw entries column
+    const blocks = data.timesheets.flatMap((t) => (t.entries || []).map((e) => ({
+      timesheet_id: t.id, person: names[t.user_id] || '', period_start: t.period_start, status: t.status,
+      date: e.date, time_in: e.in, time_out: e.out, hours: e.hours,
+      type: e.duty_id ? duties[e.duty_id] || 'Special duty' : 'Regular', explanation: e.explanation
+    })));
+
+    const csv = (name, rows, cols) => files.push({ name: `${name}.csv`, data: toCSV(rows, cols) });
+    csv('people', data.profiles);
+    csv('timesheets', withNames(sheets, 'user_id', 'person', names));
+    csv('timesheet_time_blocks', blocks);
+    csv('time_off_requests', withNames(data.time_off_requests, 'user_id', 'person', names));
+    csv('comp_time_adjustments', withNames(data.comp_adjustments, 'user_id', 'person', names));
+    csv('case_numbers', withNames(data.case_numbers, 'reserved_by', 'reserved_by_name', names));
+    csv('case_number_counters', data.case_counters);
+    csv('patrol_stats', withNames(data.patrol_stats, 'user_id', 'person', names));
+    csv('offduty_jobs', data.offduty_jobs);
+    csv('offduty_requests', withNames(data.offduty_requests, 'user_id', 'person', names));
+    csv('calendar_events', data.events);
+    csv('calendar_event_people', withNames(data.event_people, 'user_id', 'person', names));
+    csv('announcements', data.announcements);
+    csv('special_duties', data.duties);
+    csv('special_duty_assignments', withNames(data.profile_duties, 'user_id', 'person', names));
+    csv('audit_log', data.audit_log);
+
+    const setup = await sb.rpc('export_db_setup');
+    if (!setup.error) files.push({ name: 'database-setup.sql', data: setup.data });
+
+    const stamp = new Date();
+    files.unshift({ name: 'README.txt', data: [
+      `${ORG} — Employee Portal records`,
+      `Downloaded ${stamp.toLocaleString()} by ${state.profile.full_name}.`,
+      '',
+      'Each .csv file opens in Excel, Numbers or Google Sheets. Dates and times are in UTC',
+      '(e.g. 2026-10-01T14:00:00+00:00 is 9 AM Central in summer).',
+      'Timesheet signatures are in the signatures folder; the timesheets file names each one.',
+      'database-setup.sql rebuilds the empty database (tables, rules) if it is ever needed.',
+      '',
+      ...BACKUP_TABLES.map(([t]) => `${t}: ${data[t].length} rows`)
+    ].join('\r\n') });
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(makeZip(files));
+    a.download = `ccso-portal-records-${isoDate(stamp)}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
   views.audit = async (el) => {
     const f = state.audit;
     const people = await loadPeople();
@@ -2566,9 +2707,12 @@
 
     el.innerHTML = `
       <section class="card">
-        <h2>Database setup</h2>
-        <p class="muted">Download every table, function and security rule as one SQL file, as a backup or to share for review. It contains no records.</p>
-        <button class="btn" type="button" id="db-export">Download database setup</button>
+        <h2>Backups</h2>
+        <p class="muted"><strong>All records</strong>: one .zip with a spreadsheet (CSV) for each kind of record — people, timesheets, time off, comp time, case numbers, stats, off-duty jobs, calendar, announcements and this audit log — plus the signature images and the database setup. Keep a copy somewhere safe, e.g. once a pay period.</p>
+        <p class="muted"><strong>Database setup</strong>: every table, function and security rule as one SQL file, with no records.</p>
+        <div class="row"><button class="btn primary" type="button" id="records-export">Download all records</button>
+          <button class="btn" type="button" id="db-export">Download database setup</button></div>
+        <p class="hint" id="records-progress" aria-live="polite"></p>
       </section>
       <section class="card">
         <h2>Audit log</h2>
@@ -2616,6 +2760,11 @@
       a.download = `database-setup-${new Date().toISOString().slice(0, 10)}.sql`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+    $('#records-export').onclick = (e) => withBusy(e.currentTarget, async () => {
+      const prog = $('#records-progress');
+      try { await downloadAllRecords((t) => { prog.textContent = t; }); prog.textContent = 'Done. Check your downloads.'; }
+      catch (err) { prog.textContent = ''; throw err; }
     });
     $('#au-prev').onclick = () => { f.page--; showView('audit'); };
     $('#au-next').onclick = () => { f.page++; showView('audit'); };
