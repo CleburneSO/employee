@@ -15,6 +15,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* hidden always wins over a display style */
 body {
   margin: 0;
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -73,6 +74,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--gold); outl
 .row.end { align-items: flex-end; }
 .row.end .btn { margin-bottom: .85rem; }
 .submit-row { align-items: center; }
+.to-mode { display: grid; grid-template-columns: repeat(3, 1fr); width: 100%; margin-bottom: 1rem; }
+.to-mode button { padding: .6rem .5rem; font-size: .92rem; line-height: 1.25; white-space: normal; }
 .due-wrap { max-width: 1000px; margin: 1.25rem auto 0; padding: 0 1rem; }
 .due-wrap:empty { display: none; }
 .due-period { font-size: 1rem; margin: .9rem 0 .45rem; }

@@ -471,7 +471,7 @@
   const views = {};
 
   function renderShell() {
-    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', 'Time Off']];
+    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', hasComp(state.profile) ? 'Time Off & Comp' : 'Time Off']];
     if (on('uniforms')) tabs.push(['uniforms', 'Uniforms']);
     if (on('cases')) tabs.push(['cases', 'Case Numbers']);
     if (on('stats') && canSeeStats()) tabs.push(['stats', 'Stats']);
@@ -1219,15 +1219,6 @@
               : 'Your balance changes when a manager approves comp time earned or used.'}</div>
           </div>
         </div>
-        <details class="fold" id="comp-earn-fold">
-          <summary><h3>Log comp time earned</h3></summary>
-          <form id="ce-form" class="row end" autocomplete="off">
-            <label>Day worked<input type="date" name="date" max="${esc(localToday())}" required></label>
-            <label class="narrow">Hours<input type="number" name="hours" min="0.25" step="0.25" inputmode="decimal" required placeholder="e.g. 2.5"></label>
-            <label class="grow">What for<input name="reason" required placeholder="e.g. Court after shift, held over on a call"></label>
-            <button class="btn primary" type="submit">Submit</button>
-          </form>
-        </details>
         ${ledger.length ? `<details class="fold">
           <summary><h3>Comp history</h3></summary>
           <div class="table-wrap"><table class="list">
@@ -1239,74 +1230,90 @@
       </section>` : ''}
 
       <section class="card">
-        <h2>Request time off</h2>
+        ${hasComp(state.profile) ? `<h2>What do you want to do?</h2>
+        <div class="seg-toggle to-mode" role="group" aria-label="What do you want to do?">
+          <button type="button" data-mode="off" class="on">Request time off</button><button type="button" data-mode="use">Use comp time</button><button type="button" data-mode="earn">Log comp time earned</button>
+        </div>` : '<h2>Request time off</h2>'}
         <form id="to-form" autocomplete="off">
           <div class="row">
-            <label>Type<select name="type">${requestTypes().map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
-            <label>First day<input type="date" name="start" required></label>
-            <label>Last day<input type="date" name="end" required></label>
-            <label class="narrow">Total hours<input type="number" name="hours" min="0.25" step="0.25" inputmode="decimal" required placeholder="e.g. 12"></label>
+            <label class="m-off">Type<select name="type">${requestTypes().filter(([k]) => k !== 'comp').map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+            <label class="m-off m-use">First day<input type="date" name="start"></label>
+            <label class="m-off m-use">Last day<input type="date" name="end"></label>
+            <label class="m-earn" hidden>Day worked<input type="date" name="worked" max="${esc(localToday())}"></label>
+            <label class="narrow"><span id="to-hours-label">Total hours</span><input type="number" name="hours" min="0.25" step="0.25" inputmode="decimal" required placeholder="e.g. 12"></label>
           </div>
-          <p class="hint" id="to-hint" style="margin-top:-.4rem">Total hours for the whole request — for example 12 for one shift, 24 for two.</p>
-          <label>Reason (optional)<textarea name="reason" rows="2"></textarea></label>
-          <button class="btn primary" type="submit">Submit request</button>
+          <p class="hint" id="to-hint" style="margin-top:-.4rem"></p>
+          <label><span id="to-reason-label">Reason (optional)</span><textarea name="reason" rows="2"></textarea></label>
+          <button class="btn primary" type="submit" id="to-submit">Submit request</button>
         </form>
       </section>
       <section class="card"><h2>My requests</h2>${timeOffTable(data, false)}</section>`;
 
-    // Log comp earned
-    const ce = $('#ce-form');
-    if (ce) ce.onsubmit = (e) => {
-      e.preventDefault();
-      const hours = Number(ce.hours.value);
-      withBusy(ce.querySelector('button'), async () => {
-        if (!(hours > 0) || !isHalfStep(hours)) throw new Error('Hours must be in quarter-hour steps (for example 1, 1.25 or 2.5).');
-        const { data: req, error } = await sb.from('time_off_requests').insert({
-          user_id: me(), type: 'comp_earned', start_date: ce.date.value, end_date: ce.date.value,
-          hours, reason: ce.reason.value.trim()
-        }).select('id').single();
-        if (error) throw error;
-        alertApprovers(req.id);
-        toast('Comp time submitted for approval.');
-        showView('timeoff');
-      });
-    };
-
-    // Request time off
+    // One form, three things: request time off, use comp time, or log comp time earned
     const form = $('#to-form');
     const hint = $('#to-hint');
-    const baseHint = hint.textContent;
+    let mode = 'off';
+    const MODES = {
+      off: { hours: 'Total hours', reason: 'Reason (optional)', placeholder: '', submit: 'Submit request' },
+      use: { hours: 'Comp hours to use', reason: 'Reason (optional)', placeholder: '', submit: 'Request comp time off' },
+      earn: { hours: 'Hours earned', reason: 'What for', placeholder: 'e.g. Court after shift, held over on a call', submit: 'Submit comp time earned' }
+    };
     const updateHint = () => {
       hint.classList.remove('error-text');
-      if (form.type.value !== 'comp') { hint.textContent = baseHint; return; }
       const want = Number(form.hours.value) || 0;
-      hint.textContent = `You have ${hrs(available)} comp hours you can use${pUse ? ` (${hrs(balance)} minus ${hrs(pUse)} already requested)` : ''}.`;
+      if (mode === 'off') { hint.textContent = 'Total hours for the whole request — for example 12 for one shift, 24 for two.'; return; }
+      if (mode === 'earn') {
+        hint.textContent = `Hours you worked beyond your shift. They’re added to your ${hrs(balance)}-hour balance once a manager approves${want ? ` (${hrs(balance + want)} after)` : ''}.`;
+        return;
+      }
+      hint.textContent = `You have ${hrs(available)} comp hours you can use${pUse ? ` (${hrs(balance)} minus ${hrs(pUse)} already requested)` : ''}.${want && want <= available ? ` ${hrs(available - want)} left after this.` : ''}`;
       if (want > available) {
         hint.textContent += ` This request is ${hrs(want - available)} more than that.`;
         hint.classList.add('error-text');
       }
     };
-    form.type.onchange = updateHint;
+    const setMode = (m) => {
+      mode = m;
+      $$('.to-mode button', el).forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
+      $$('.m-off, .m-use, .m-earn', form).forEach((l) => { l.hidden = !l.classList.contains(`m-${m}`); });
+      form.start.required = form.end.required = m !== 'earn';
+      form.worked.required = m === 'earn';
+      form.reason.required = m === 'earn';
+      $('#to-hours-label').textContent = MODES[m].hours;
+      $('#to-reason-label').textContent = MODES[m].reason;
+      form.reason.placeholder = MODES[m].placeholder;
+      $('#to-submit').textContent = MODES[m].submit;
+      updateHint();
+    };
+    $$('.to-mode button', el).forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
     form.hours.oninput = updateHint;
     form.start.onchange = () => { if (!form.end.value || form.end.value < form.start.value) form.end.value = form.start.value; };
     form.onsubmit = (e) => {
       e.preventDefault();
       const hours = Number(form.hours.value);
-      if (form.type.value === 'comp' && hours > available
+      if (mode === 'use' && hours > available
           && !confirm(`You only have ${hrs(available)} comp hours available. Send the request for ${hrs(hours)} hours anyway?`)) return;
-      withBusy(form.querySelector('button[type=submit]'), async () => {
-        if (form.end.value < form.start.value) throw new Error('Last day must be on or after the first day.');
+      withBusy($('#to-submit'), async () => {
         if (!(hours > 0) || !isHalfStep(hours)) throw new Error('Hours must be in quarter-hour steps (for example 4, 4.25 or 12).');
-        const { data: req, error } = await sb.from('time_off_requests').insert({
-          user_id: me(), type: form.type.value, start_date: form.start.value,
-          end_date: form.end.value, hours, reason: form.reason.value.trim() || null
-        }).select('id').single();
+        let row;
+        if (mode === 'earn') {
+          if (!form.worked.value) throw new Error('Pick the day you worked.');
+          if (!form.reason.value.trim()) throw new Error('Say what the comp time was earned for.');
+          row = { type: 'comp_earned', start_date: form.worked.value, end_date: form.worked.value, hours, reason: form.reason.value.trim() };
+        } else {
+          if (!form.start.value) throw new Error('Pick the first day.');
+          if (form.end.value && form.end.value < form.start.value) throw new Error('Last day must be on or after the first day.');
+          row = { type: mode === 'use' ? 'comp' : form.type.value, start_date: form.start.value, end_date: form.end.value || form.start.value,
+                  hours, reason: form.reason.value.trim() || null };
+        }
+        const { data: req, error } = await sb.from('time_off_requests').insert({ user_id: me(), ...row }).select('id').single();
         if (error) throw error;
         alertApprovers(req.id);
-        toast('Request submitted.');
+        toast(mode === 'earn' ? 'Comp time submitted for approval.' : 'Request submitted.');
         showView('timeoff');
       });
     };
+    setMode('off');
     bindTimeOffButtons(el, data);
   };
 
