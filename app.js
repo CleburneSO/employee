@@ -1578,7 +1578,7 @@
     const adjThisYear = (adjR.data || []).filter((a) => a.fy_start === fy);
     const lineRow = () => `<tr>
       <td class="it"><input class="uo-item" placeholder="Galls item # or link" maxlength="300"></td>
-      <td class="de"><input class="uo-desc" placeholder="Description, size, color (e.g. Duty pants, 34x32, black)" maxlength="200"></td>
+      <td class="de"><input class="uo-desc" placeholder="Description &amp; color (e.g. Duty pants, black)" maxlength="200"></td>
       <td><input class="uo-size" placeholder="Size" maxlength="40"></td>
       <td><input class="uo-qty" type="number" min="1" max="99" step="1" value="1" inputmode="numeric" aria-label="Quantity"></td>
       <td><input class="uo-price" type="number" min="0" step="0.01" placeholder="Price each" inputmode="decimal" aria-label="Price each"></td>
