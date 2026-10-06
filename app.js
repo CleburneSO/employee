@@ -552,10 +552,12 @@
   // Save any timesheet draft that's waiting when the page is hidden or closed
   document.addEventListener('visibilitychange', () => { if (document.hidden) state.flushDraft?.(); });
 
-  // Banner until submitted: last pay period's timesheet, and the current one on its last day
+  // Banner until submitted: last pay period's timesheet, and the current one on its last day.
+  // Only on the Calendar and My Timesheets, so the other pages stay clean.
   async function refreshDue() {
     const box = $('#due');
     if (!box) return;
+    if (!['calendar', 'timesheets'].includes(state.view)) { box.innerHTML = ''; return; }
     const cur = currentPeriod(), prev = previousPeriod();
     const joined = state.profile.created_at ? isoDate(new Date(state.profile.created_at)) : '';
     const want = [];
@@ -563,7 +565,7 @@
     if (periodEnd(cur) === isoDate(new Date())) want.push(cur);
     if (!want.length) { box.innerHTML = ''; return; }
     const { data, error } = await sb.from('timesheets').select('period_start, status').eq('user_id', me()).in('period_start', want);
-    if (error) return;
+    if (error || !['calendar', 'timesheets'].includes(state.view)) return;   // moved to another page meanwhile
     const status = Object.fromEntries(data.map((t) => [t.period_start, t.status]));
     box.innerHTML = want.filter((p) => !['submitted', 'approved'].includes(status[p])).map((p) => `<div class="notice warn due"><span>
       ${status[p] === 'rejected' ? `Your timesheet for <strong>${esc(periodLabel(p))}</strong> was sent back and needs to be resubmitted.`
@@ -575,8 +577,8 @@
 
   async function showView(v) {
     state.flushDraft?.();
-    refreshDue();
     state.view = v;
+    refreshDue();
     $$('.tabs button[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
     $('.tab-group-toggle')?.classList.toggle('active', (state.adminViews || []).includes(v));
     const cur = $('.menu-current');
@@ -670,7 +672,8 @@
       <td>${timeSelect('t-in', e.in || '', 'Time in', true)}</td>
       <td>${timeSelect('t-out', e.out || '', 'Time out', true)}</td>
       <td class="num t-hours"></td>
-      <td><div class="expl-wrap">${typeSelect(e.duty_id || '')}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (OT, absence…)" aria-label="Explanation"></div></td>
+      <td class="note-cell"><button type="button" class="note-btn" title="Add a note" aria-label="Add a note for ${esc(fmtShort(iso))}">✎</button></td>
+      <td class="expl-cell"><div class="expl-wrap">${typeSelect(e.duty_id || '')}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (OT, absence…)" aria-label="Explanation"></div></td>
     </tr>`;
   }
   function buildRows(start, entries = []) {
@@ -701,6 +704,8 @@
       const type = $('.t-type', tr)?.value || '';
       $('.t-hours', tr).textContent = h ? hrs(h) : '';
       tr.classList.toggle('is-duty', !!type);
+      // on a phone the note box stays tucked away until it's needed
+      if (type || $('.t-expl', tr).value) tr.classList.add('note-open');
       if (type) fromTimes[type] = (fromTimes[type] || 0) + round2(h);
       else worked += round2(h);
     });
@@ -753,7 +758,7 @@
             <label>Pay period${periodSelect('ts-period', state.tsPeriod || currentPeriod(), mine.map((t) => t.period_start))}</label>
           </div>
           <div class="usual-bar" id="ts-usual"><span class="usual-label">My usual hours</span>${usualPicker(state.profile.usual_in, state.profile.usual_out)}
-            <span class="hint" id="ts-usual-hint">${hasUsual() ? 'Pick <strong>★</strong> at the top of a day’s Time in list to fill in your usual shift.' : 'Set these and your shift shows at the top of each day’s Time in list.'}</span></div>
+            <span class="hint" id="ts-usual-hint">${hasUsual() ? 'Pick <strong>★</strong> in a Time in list to fill in your usual shift.' : 'Your usual shift will show at the top of each Time in list.'}</span></div>
           <div id="ts-status" class="notice hidden"></div>
           <div id="ts-draft-note" class="notice hidden"></div>
           <div id="ts-holiday" class="notice holiday-note hidden"></div>
@@ -761,11 +766,11 @@
             <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
             <tbody id="ts-rows"></tbody>
           </table></div>
-          <p class="hint">Overnight shifts are handled automatically. Worked more than one block in a day? Tap <strong>+</strong> next to the date${segDuties.length ? ' and pick the block’s type (e.g. Traffic OT) — those hours go on that line below' : ''}.</p>
+          <p class="hint">Tap <strong>+</strong> by a date to add another block of time${segDuties.length ? ' (e.g. Traffic OT)' : ''}. Overnight shifts work automatically.</p>
 
           <div class="table-wrap"><table class="grid extras">
             <tbody>
-              <tr class="total"><th>Total Hours Worked</th><td class="num" id="ts-total">0</td><td class="hint">This is the number of hours you actually worked.</td></tr>
+              <tr class="total"><th>Total Hours Worked</th><td class="num" id="ts-total">0</td><td class="hint"></td></tr>
               ${EXTRA_HOURS.map(([k, label, hint]) => `<tr>
                 <th><label for="x-${k}">${esc(label)}</label></th>
                 <td><input type="number" id="x-${k}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
@@ -843,8 +848,12 @@
       } catch (err) { toast(err.message || String(err), true); }
     });
     $('#ts-rows').addEventListener('click', (e) => {
-      const add = e.target.closest('.add-seg'), del = e.target.closest('.del-seg');
-      if (add) {
+      const add = e.target.closest('.add-seg'), del = e.target.closest('.del-seg'), note = e.target.closest('.note-btn');
+      if (note) {
+        const tr = note.closest('tr');
+        tr.classList.add('note-open');
+        $('.t-expl', tr).focus();
+      } else if (add) {
         const iso = add.closest('tr').dataset.date;
         const rowsOfDay = $$(`#ts-rows tr[data-date="${iso}"]`);
         const prev = rowsOfDay[rowsOfDay.length - 1];
@@ -1215,8 +1224,8 @@
             <h2>Comp time</h2>
             <div class="comp-balance"><span class="comp-num">${hrs(balance)}</span> hrs available</div>
             <div class="hint" style="margin:0">${pEarn || pUse
-              ? `Waiting for approval: ${pEarn ? `+${hrs(pEarn)} earned` : ''}${pEarn && pUse ? ', ' : ''}${pUse ? `−${hrs(pUse)} used` : ''}. Your balance changes once a manager approves.`
-              : 'Your balance changes when a manager approves comp time earned or used.'}</div>
+              ? `Waiting for approval: ${pEarn ? `+${hrs(pEarn)} earned` : ''}${pEarn && pUse ? ', ' : ''}${pUse ? `−${hrs(pUse)} used` : ''}.`
+              : ''}</div>
           </div>
         </div>
         ${ledger.length ? `<details class="fold">
@@ -1261,9 +1270,9 @@
     const updateHint = () => {
       hint.classList.remove('error-text');
       const want = Number(form.hours.value) || 0;
-      if (mode === 'off') { hint.textContent = 'Total hours for the whole request — for example 12 for one shift, 24 for two.'; return; }
+      if (mode === 'off') { hint.textContent = 'Total hours: 12 for one shift, 24 for two.'; return; }
       if (mode === 'earn') {
-        hint.textContent = `Hours you worked beyond your shift. They’re added to your ${hrs(balance)}-hour balance once a manager approves${want ? ` (${hrs(balance + want)} after)` : ''}.`;
+        hint.textContent = `Added to your balance once approved${want ? ` (${hrs(balance + want)} hrs after)` : ''}.`;
         return;
       }
       hint.textContent = `You have ${hrs(available)} comp hours you can use${pUse ? ` (${hrs(balance)} minus ${hrs(pUse)} already requested)` : ''}.${want && want <= available ? ` ${hrs(available - want)} left after this.` : ''}`;
@@ -1589,13 +1598,13 @@
       <section class="card comp-card">
         <h2>Uniform allowance</h2>
         <div class="comp-balance"><span class="comp-num">${money(b.balance)}</span> left of ${money(b.allowance)}</div>
-        <div class="hint" style="margin:0">For ${esc(fyLabel(fy))}. Resets every October 1.${Number(b.pending) ? ` ${money(b.pending)} is waiting for approval, so you can request up to ${money(available)} more.` : ''}</div>
+        <div class="hint" style="margin:0">${esc(fyLabel(fy))}. Resets Oct 1.${Number(b.pending) ? ` ${money(b.pending)} is waiting for approval, so you can request up to ${money(available)} more.` : ''}</div>
         ${adjThisYear.length ? `<details class="fold"><summary><h3>Adjustments</h3></summary>
           <ul class="plain">${adjThisYear.map((a) => `<li>${Number(a.amount) > 0 ? '+' : '−'}${money(Math.abs(a.amount))} — ${esc(a.note)}</li>`).join('')}</ul></details>` : ''}
       </section>
       <section class="card">
         <h2>Request uniforms or equipment</h2>
-        <p class="hint">List what you want from Galls, one line per item. The sheriff or chief deputy approves it and it comes out of your allowance.</p>
+        <p class="hint">One line per Galls item.</p>
         <form id="uo-form" autocomplete="off">
           <div class="table-wrap"><table class="grid uo-lines">
             <thead><tr><th>Galls item # or link</th><th>Description</th><th>Size</th><th>Qty</th><th>Price each</th><th class="num">Total</th><th></th></tr></thead>
@@ -1693,7 +1702,7 @@
       ${missingCount ? `<section class="card"><h2>Haven’t submitted a timesheet <span class="count">${missingCount}</span></h2>
         ${missing.map(({ p, list }) => `<h3 class="due-period">${esc(periodLabel(p))} <span class="muted">${periodEnd(p) === today ? 'due today' : `was due ${esc(fmtShort(periodEnd(p)))}`}</span></h3>
           <div class="due-people">${list.map((x) => `<span class="chip ${x.sentBack ? '' : 'muted-chip'}" title="${x.sentBack ? 'Sent back, not resubmitted yet' : 'Not submitted'}">${esc(x.full_name || x.email)}${x.sentBack ? ' (sent back)' : ''}</span>`).join(' ')}</div>`).join('')}
-        <p class="hint">Each of them also gets an automatic reminder email the morning of the last day, and sees a banner when they sign in.</p>
+        
       </section>` : ''}
       <section class="card"><h2>Timesheets awaiting approval <span class="count">${ts.data.length}</span></h2>
         <div id="ts-pending">${ts.data.length ? timesheetTable(ts.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>
@@ -2097,8 +2106,7 @@
 
       <section class="card">
         <h2>${isManager() && !state.calMine ? 'Coming up (next 15 days)' : 'Coming up for you (next 15 days)'}</h2>
-        ${isManager() ? '' : '<p class="hint">Your calendar shows your court dates, trainings and other events you’re on, anything for the whole office, and your own events (only you can see those).</p>'}
-        ${soonEv.data.length ? `<ul class="agenda">${soonEv.data.map((e) => `<li class="${mine(e) ? 'is-mine' : ''}">
+                ${soonEv.data.length ? `<ul class="agenda">${soonEv.data.map((e) => `<li class="${mine(e) ? 'is-mine' : ''}">
             <button class="agenda-item" data-ev="${e.id}">
               <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
               <span class="agenda-title">${esc(e.title)}${mine(e) && !e.owner_id ? ' <span class="tag tag-mine">You</span>' : ''}${e.isJob && !e.mineJob ? ` <span class="muted">${e.left} spot${e.left === 1 ? '' : 's'} open</span>` : ''}${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}</span>
@@ -2230,7 +2238,7 @@
     const [ed, et] = toLocalInput(e.ends_at);
     openModal(`
       <h2>${e.id ? 'Edit my event' : 'Add my event'}</h2>
-      <p class="hint">Only you can see this. It’s for your own planning and doesn’t notify anyone.</p>
+      <p class="hint">Only you can see this.</p>
       <form id="pe-form" autocomplete="off">
         <label>Title<input name="title" required maxlength="200" value="${esc(e.title || '')}" placeholder="e.g. Training, Vacation, To-Do, etc."></label>
         <label class="check"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
@@ -2499,7 +2507,7 @@
     el.innerHTML = `
       <section class="card">
         <div class="card-head"><h2>Off-duty jobs</h2>${isManager() ? '<button class="btn small primary" id="job-new">Post a job</button>' : ''}</div>
-        <p class="hint">Request a job and a manager will approve who works it. You’ll see “Approved” here once you’re on it.</p>
+        <p class="hint">You’ll see “Approved” once you’re on a job.</p>
         ${upcoming.length ? upcoming.map(jobCard).join('') : '<p class="muted">No off-duty jobs posted right now.</p>'}
       </section>
       ${myReqs.length ? `<section class="card"><h2>My requests</h2>

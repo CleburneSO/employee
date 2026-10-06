@@ -934,7 +934,7 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
   :root[data-theme="dark"] .stat-counter.auto { background: #2b2e22; }
   :root[data-theme="dark"] .auto-tag { background: #353a2b; }
   :root[data-theme="dark"] table.list tr.is-me td { background: #3c2f17; }
-  :root[data-theme="dark"] table.entry .add-seg, :root[data-theme="dark"] table.entry .del-seg { border: 1px solid #474b50; background: #222222; }
+  :root[data-theme="dark"] table.entry .add-seg, :root[data-theme="dark"] table.entry .del-seg, :root[data-theme="dark"] table.entry .note-btn { border: 1px solid #474b50; background: #222222; }
   :root[data-theme="dark"] table.entry .add-seg:hover { background: #2b3024; }
   :root[data-theme="dark"] table.list tr.is-earned td { background: #2b3221; }
   :root[data-theme="dark"] table.extras tr.duty-row.unpaid th, :root[data-theme="dark"] table.extras tr.duty-row.unpaid td { background: #212931; }
@@ -963,3 +963,15 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
 }
 @media print { .theme-toggle { display: none !important; } }
 /* ===== END DARK MODE ===== */
+
+/* timesheet note button: phone only; the note box shows once tapped or filled in */
+table.entry td.note-cell { display: none; }
+@media screen and (max-width: 760px) {
+  table.entry tr { grid-template-columns: 4.3rem 1fr 1fr 2rem 1.7rem; }
+  table.entry td.note-cell { display: block; }
+  table.entry .note-btn {
+    display: inline-flex; align-items: center; justify-content: center; width: 1.7rem; height: 1.7rem; margin: 0;
+    padding: 0; border: 1px solid #cfd4dc; border-radius: 99px; background: #fff; color: var(--muted); font-size: .9rem; line-height: 1; }
+  table.entry tr.note-open .note-btn { visibility: hidden; }
+  table.entry tr:not(.note-open) td.expl-cell { display: none; }
+}
