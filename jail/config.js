@@ -17,7 +17,7 @@ window.APP_CONFIG = {
   LOGO: 'logo.png',
 
   // Same pay periods as the Sheriff's Office
-  FIRST_PAY_PERIOD: '2026-09-17',
+  FIRST_PAY_PERIOD: '2026-10-01',
   PAY_PERIOD_DAYS: 14,
 
   // The jail uses the calendar, timesheets and time off; these are off.

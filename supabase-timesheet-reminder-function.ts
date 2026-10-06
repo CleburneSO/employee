@@ -18,7 +18,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 const ORG_NAME = Deno.env.get('ORG_NAME') || "Cleburne County Sheriff's Office";
 
 // Must match the site: FIRST_PAY_PERIOD and PAY_PERIOD_DAYS in config.js
-const FIRST_PERIOD = '2026-09-17';
+const FIRST_PERIOD = '2026-10-01';
 const PERIOD_DAYS = 14;
 const TIME_ZONE = 'America/Chicago';
 
