@@ -713,6 +713,17 @@ begin
     new.timeoff_approver := old.timeoff_approver;
     new.comp_time := old.comp_time;
   end if;
+  -- Only the time-off approvers (or the site owner) choose who approves time off, and only they can
+  -- change an approver's role or turn off their account, so other managers (e.g. clerks) can't
+  -- give themselves approval rights. If nobody is ticked yet, any manager can tick the first ones.
+  if not (public.is_timeoff_approver() or public.is_owner()) then
+    if new.timeoff_approver is distinct from old.timeoff_approver then
+      raise exception 'Only the sheriff or chief deputy can change who approves time off.';
+    end if;
+    if old.timeoff_approver and (new.role is distinct from old.role or new.active is distinct from old.active) then
+      raise exception 'Only the sheriff or chief deputy can change the role or account of someone who approves time off.';
+    end if;
+  end if;
   -- Only managers approve time off
   if new.role <> 'manager' then
     new.timeoff_approver := false;
@@ -1133,7 +1144,8 @@ begin
   end if;
 
   if new.status in ('approved', 'declined') then
-    if not public.is_manager() then raise exception 'Only a manager can approve or decline.'; end if;
+    -- Same people who approve time off (the sheriff and chief deputy)
+    if not public.is_timeoff_approver() then raise exception 'Only the sheriff or chief deputy can approve or decline off-duty requests.'; end if;
     if new.status = 'approved' then
       select count(*) into taken from public.offduty_requests
         where job_id = old.job_id and status = 'approved' and id <> old.id;
@@ -1159,8 +1171,8 @@ begin
     return new;
   end if;
 
-  -- Manager moving someone back to "requested" (undo a decision)
-  if new.status = 'requested' and public.is_manager() then
+  -- Approver moving someone back to "requested" (undo a decision)
+  if new.status = 'requested' and public.is_timeoff_approver() then
     new.decided_by := null; new.decided_at := null;
     return new;
   end if;

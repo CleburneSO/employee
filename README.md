@@ -160,6 +160,8 @@ Setup (uses your Resend account, with ccsoportal.com verified):
 
 **Time-off approvers:** on the **Team** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request and every off-duty job request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
 
+The same people approve who works **off-duty jobs**, and only they (or the site owner) can tick or untick **Approves time off**, or change the role or account of someone who approves. That lets you make **clerks** managers without approvals: they see everything managers see, approve timesheets, edit the team, post events and print payroll, but they can't approve time off, comp time, uniform orders or off-duty jobs, and they can't give themselves that right. Leave **Approves time off** unticked for them.
+
 If alerts aren't set up, everything still saves; the site shows a one-time note that the email couldn't be sent. Deactivated people never get emails.
 
 ## Jail portal (`/jail/`)

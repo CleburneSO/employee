@@ -83,6 +83,8 @@
   // If nobody is ticked, any manager can (the database applies the same rule).
   const timeOffApprovers = () => Object.values(state.people).filter((p) => p.role === 'manager' && p.active !== false && p.timeoff_approver);
   const canApproveTimeOff = () => isManager() && (!!state.profile?.timeoff_approver || !timeOffApprovers().length);
+  // Only approvers (or the site owner) pick who approves, so other managers (e.g. clerks) can't give themselves approval
+  const canSetApprovers = () => canApproveTimeOff() || isOwner();
   const approverNames = () => timeOffApprovers().map((p) => p.full_name || p.email).join(' or ');
   const round2 = (n) => Math.round(n * 100) / 100;
   const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
@@ -2493,9 +2495,9 @@
             ${approved.length ? ` · ${approved.map((r) => `<span class="chip muted-chip">${esc(dirName(r.user_id))}</span>`).join(' ')}` : ''}</div>
           ${isManager() && pending.length ? `<div class="job-requests"><strong>Requests (${pending.length}):</strong>
             ${pending.map((r) => `<div class="req-row"><span>${esc(dirName(r.user_id))}${r.note ? ` <span class="muted">— ${esc(r.note)}</span>` : ''} <span class="muted">· ${esc(new Date(r.created_at).toLocaleString())}</span></span>
-              <span><button class="btn small primary" data-decide="${r.id}" data-to="approved" ${full ? 'disabled title="All spots are filled"' : ''}>Approve</button>
-              <button class="btn small danger" data-decide="${r.id}" data-to="declined">Decline</button></span></div>`).join('')}</div>` : ''}
-          ${isManager() && approved.length ? `<div class="job-requests muted-block">${approved.map((r) => `<div class="req-row"><span>✓ ${esc(dirName(r.user_id))}</span><button class="btn-link small-link" data-decide="${r.id}" data-to="requested">Undo approval</button></div>`).join('')}</div>` : ''}
+              ${canApproveTimeOff() ? `<span><button class="btn small primary" data-decide="${r.id}" data-to="approved" ${full ? 'disabled title="All spots are filled"' : ''}>Approve</button>
+              <button class="btn small danger" data-decide="${r.id}" data-to="declined">Decline</button></span>` : ''}</div>`).join('')}</div>` : ''}
+          ${isManager() && approved.length ? `<div class="job-requests muted-block">${approved.map((r) => `<div class="req-row"><span>✓ ${esc(dirName(r.user_id))}</span>${canApproveTimeOff() ? `<button class="btn-link small-link" data-decide="${r.id}" data-to="requested">Undo approval</button>` : ''}</div>`).join('')}</div>` : ''}
         </div>
         <div class="job-actions">${action}${isManager() ? `<button class="btn small" data-editjob="${j.id}">Edit</button>` : ''}</div>
       </article>`;
@@ -3346,12 +3348,13 @@
         ? `<span class="chip muted-chip" title="Shown on everyone’s timesheet">${esc(d.name)} (all)</span>`
         : `<label class="chip-check"><input type="checkbox" data-duty="${d.id}" ${has.has(`${p.id}|${d.id}`) ? 'checked' : ''}><span>${esc(d.name)}</span></label>`).join('')
         : '<span class="muted">None set up yet (see Special duties setup).</span>';
+      const lockApprover = !!p.timeoff_approver && !canSetApprovers();   // e.g. a clerk editing the sheriff
       openModal(`
         <h2 class="modal-head">${esc(p.full_name || p.email)}</h2>
         <form id="person-form" autocomplete="off">
           <div class="row">
             <label>Name (prints on timesheets)<input name="full_name" value="${esc(p.full_name)}" required></label>
-            <label>Role<select name="role" ${self ? 'disabled title="You can’t change your own role"' : ''}>
+            <label>Role<select name="role" ${self ? 'disabled title="You can’t change your own role"' : lockApprover ? 'disabled title="Only the sheriff or chief deputy can change this"' : ''}>
               <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
               <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
             </select></label>
@@ -3376,7 +3379,7 @@
 
           ${'timeoff_approver' in p ? `<fieldset class="person-set">
             <legend>Time off</legend>
-            <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.</span></label>
+            <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''} ${canSetApprovers() ? '' : 'disabled'}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.${canSetApprovers() ? '' : ' <em>Only the sheriff or chief deputy can change this.</em>'}</span></label>
           </fieldset>` : ''}
 
           <fieldset class="person-set" ${on('stats') ? '' : 'hidden'}>
@@ -3393,7 +3396,7 @@
           <div class="actions">
             <button class="btn primary" type="submit">Save</button>
             <button class="btn" type="button" id="person-cancel">Cancel</button>
-            ${self ? '' : `<button class="btn danger" type="button" id="person-deactivate" style="margin-left:auto">Deactivate</button>`}
+            ${self || lockApprover ? '' : `<button class="btn danger" type="button" id="person-deactivate" style="margin-left:auto">Deactivate</button>`}
           </div>
         </form>`);
 
@@ -3409,9 +3412,9 @@
           is_supervisor: f.is_supervisor.checked,
           reports_to: f.reports_to.value || null
         };
-        if (!self) update.role = f.role.value;
+        if (!self && !lockApprover) update.role = f.role.value;
         if (f.comp_time) update.comp_time = f.comp_time.checked;
-        if (f.timeoff_approver) {
+        if (f.timeoff_approver && !f.timeoff_approver.disabled) {
           update.timeoff_approver = f.timeoff_approver.checked;
           if (update.timeoff_approver && (update.role || p.role) !== 'manager') { toast('Only managers can approve time off. Change their role to Manager first.', true); return; }
         }
