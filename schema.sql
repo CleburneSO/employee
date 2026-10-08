@@ -432,6 +432,8 @@ alter table public.profiles add column if not exists comp_time boolean default f
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
 -- Comp time earned: the hours actually worked. hours = the comp hours credited (time and a half).
 alter table public.time_off_requests add column if not exists hours_worked numeric(6,2);
+-- Uniform order the sheriff or chief deputy entered for someone (e.g. a paper or phone order): who entered it
+alter table public.uniform_orders add column if not exists entered_by uuid references public.profiles(id);
 -- One-time fix for comp time logged before time and a half: what they entered was the hours worked.
 -- Only touches entries without hours_worked, so running this file again changes nothing.
 update public.time_off_requests set hours_worked = hours, hours = round(hours * 1.5 * 4) / 4
@@ -1466,7 +1468,19 @@ begin
   if auth.uid() is null then return new; end if;   -- dashboard / email function
 
   if tg_op = 'INSERT' then
-    new.user_id := auth.uid();
+    -- The sheriff or chief deputy can enter an order for someone else; it's approved right away
+    if new.user_id is not null and new.user_id <> auth.uid() then
+      if not public.is_timeoff_approver() then
+        raise exception 'Only the sheriff or chief deputy can enter an order for someone else.';
+      end if;
+      if not exists (select 1 from public.profiles where id = new.user_id and active) then
+        raise exception 'Pick an active employee.';
+      end if;
+      new.entered_by := auth.uid();
+    else
+      new.user_id := auth.uid();
+      new.entered_by := null;
+    end if;
     new.status := 'pending';
     new.fy_start := public.uniform_current_fy();
     new.approved_total := null; new.manager_note := null; new.reviewed_by := null; new.reviewed_at := null;
@@ -1495,6 +1509,20 @@ begin
     new.total := (select sum((x->>'qty')::int * (x->>'price')::numeric) from jsonb_array_elements(new.items) x);
     if new.total <= 0 then raise exception 'The total has to be more than $0.'; end if;
 
+    if new.entered_by is not null then
+      -- Entered by an approver: approved now, and it can't go over what's left
+      select * into s from public.uniform_sums(new.user_id, new.fy_start);
+      left_over := public.uniform_allowance() + s.adjusted - s.spent;
+      if new.total > left_over then
+        raise exception 'This order is $% but they only have $% left in their uniform allowance.',
+          to_char(new.total, 'FM999990.00'), to_char(greatest(left_over, 0), 'FM999990.00');
+      end if;
+      new.status := 'approved'; new.approved_total := new.total;
+      new.reviewed_by := auth.uid(); new.reviewed_at := now();
+      new.approver_alerted_at := now();   -- nothing to alert about
+      return new;
+    end if;
+
     -- No request bigger than what's left (other pending requests count against it too)
     select * into s from public.uniform_sums(new.user_id, new.fy_start);
     left_over := public.uniform_allowance() + s.adjusted - s.spent - s.pending;
@@ -1509,7 +1537,7 @@ begin
   -- The request itself never changes once it's sent
   new.id := old.id; new.user_id := old.user_id; new.fy_start := old.fy_start; new.items := old.items;
   new.total := old.total; new.note := old.note; new.created_at := old.created_at;
-  new.approver_alerted_at := old.approver_alerted_at;
+  new.approver_alerted_at := old.approver_alerted_at; new.entered_by := old.entered_by;
 
   if public.is_manager() and not public.is_timeoff_approver()
      and new.status in ('approved', 'denied') and new.status is distinct from old.status then
@@ -1820,7 +1848,7 @@ create policy timesheet_drafts_own on public.timesheet_drafts as PERMISSIVE for 
 drop policy if exists uniform_orders_select on public.uniform_orders;
 create policy uniform_orders_select on public.uniform_orders as PERMISSIVE for SELECT to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
 drop policy if exists uniform_orders_insert on public.uniform_orders;
-create policy uniform_orders_insert on public.uniform_orders as PERMISSIVE for INSERT to authenticated with check (((user_id = auth.uid()) AND is_active()));
+create policy uniform_orders_insert on public.uniform_orders as PERMISSIVE for INSERT to authenticated with check ((is_active() AND ((user_id = auth.uid()) OR is_timeoff_approver())));
 drop policy if exists uniform_orders_update on public.uniform_orders;
 create policy uniform_orders_update on public.uniform_orders as PERMISSIVE for UPDATE to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
 

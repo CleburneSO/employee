@@ -1501,7 +1501,7 @@
       </table>
       <table class="to-table"><tbody>
         ${o.note ? row('Note', esc(o.note)) : ''}
-        ${row('Requested', esc(fmtDateTime(o.created_at)))}
+        ${o.entered_by ? row('Entered by', `${esc(personName(o.entered_by, 'Manager'))} on ${esc(fmtDateTime(o.created_at))}`) : row('Requested', esc(fmtDateTime(o.created_at)))}
         ${row('Status', esc(uniformStatus(o)))}
         ${decided ? row(o.status === 'approved' ? 'Approved by' : 'Denied by', `${esc(personName(o.reviewed_by, 'Manager'))} on ${esc(fmtDateTime(o.reviewed_at))}`) : ''}
         ${o.ordered_at ? row('Ordered', esc(fmtDateTime(o.ordered_at))) : ''}
@@ -1595,6 +1595,15 @@
     const b = bals.find((x) => x.user_id === me()) || { allowance: 500, balance: 500, pending: 0, spent: 0, adjusted: 0 };
     const fy = b.fy_start;
     const available = Math.max(0, Number(b.balance) - Number(b.pending));
+    // The sheriff and chief deputy can also enter an order for someone else (approved right away)
+    const approver = canApproveTimeOff();
+    const others = approver ? bals.filter((x) => x.user_id !== me() && x.active !== false) : [];
+    let forId = me();
+    const avail = () => {
+      if (forId === me()) return available;
+      const x = bals.find((y) => y.user_id === forId);
+      return x ? Math.max(0, Number(x.balance)) : 0;
+    };
     const adjThisYear = (adjR.data || []).filter((a) => a.fy_start === fy);
     const lineRow = () => `<tr>
       <td class="it"><input class="uo-item" placeholder="Galls item # or link" maxlength="300"></td>
@@ -1617,6 +1626,9 @@
         <h2>Request uniforms or equipment</h2>
         <p class="hint">One line per Galls item.</p>
         <form id="uo-form" autocomplete="off">
+          ${others.length ? `<label class="uo-for">Order for<select id="uo-for"><option value="">Myself (request)</option>${others.map((x) =>
+            `<option value="${esc(x.user_id)}">${esc(x.full_name || 'Unnamed')} (${money(Math.max(0, Number(x.balance)))} left)</option>`).join('')}</select></label>
+          <p class="hint" id="uo-for-hint" hidden>For an order placed on paper or by phone. It’s saved as approved and taken out of their allowance right away.</p>` : ''}
           <div class="table-wrap"><table class="grid uo-lines">
             <thead><tr><th>Galls item # or link</th><th>Description</th><th>Size</th><th>Qty</th><th>Price each</th><th class="num">Total</th><th></th></tr></thead>
             <tbody id="uo-rows">${lineRow()}</tbody>
@@ -1644,13 +1656,20 @@
       });
       total = Math.round(total * 100) / 100;
       $('#uo-total').textContent = money(total);
-      const over = total > available + 0.004;
+      const a = avail(), them = forId !== me();
+      const over = total > a + 0.004;
       const left = $('#uo-left');
-      left.textContent = over ? `That’s ${money(total - available)} more than the ${money(available)} you have available.` : `${money(available - total)} left after this.`;
+      left.textContent = over ? `That’s ${money(total - a)} more than the ${money(a)} ${them ? 'they have' : 'you have'} available.` : `${money(a - total)} left after this.`;
       left.classList.toggle('error-text', over);
       $('#uo-submit').disabled = over;
     };
     f.addEventListener('input', recalc);
+    $('#uo-for')?.addEventListener('change', (e) => {
+      forId = e.target.value || me();
+      $('#uo-for-hint').hidden = forId === me();
+      $('#uo-submit').textContent = forId === me() ? 'Submit request' : 'Save approved order';
+      recalc();
+    });
     $('#uo-add').onclick = () => { $('#uo-rows').insertAdjacentHTML('beforeend', lineRow()); $('#uo-rows tr:last-child .uo-item').focus(); };
     $('#uo-rows').addEventListener('click', (e) => {
       if (!e.target.closest('.uo-del')) return;
@@ -1667,12 +1686,18 @@
           if (!(x.qty >= 1 && x.qty <= 99 && Number.isInteger(x.qty))) throw new Error(`Check the quantity for “${x.description}” (1 to 99).`);
           if (!(x.price > 0)) throw new Error(`Enter the price for “${x.description}”.`);
         }
+        const forOther = forId !== me();
         const { data: o, error } = await sb.from('uniform_orders').insert({
+          ...(forOther ? { user_id: forId } : {}),
           items: items.map((x) => ({ ...x, price: x.price.toFixed(2) })), note: f.note.value.trim() || null
-        }).select('id').single();
+        }).select('id, total').single();
         if (error) throw error;
-        notifyQuiet('uniform_request', o.id);
-        toast('Request sent for approval.');
+        if (forOther) {
+          toast(`Order saved for ${bals.find((x) => x.user_id === forId)?.full_name || 'them'}. ${money(o.total)} taken out of their allowance.`);
+        } else {
+          notifyQuiet('uniform_request', o.id);
+          toast('Request sent for approval.');
+        }
         showView('uniforms');
       });
     };
