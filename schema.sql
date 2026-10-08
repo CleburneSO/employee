@@ -430,6 +430,12 @@ alter table public.profiles add column if not exists timeoff_approver boolean de
 -- Has comp time (only used by portals that give comp time to ticked people, e.g. the jail)
 alter table public.profiles add column if not exists comp_time boolean default false not null;
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
+-- Comp time earned: the hours actually worked. hours = the comp hours credited (time and a half).
+alter table public.time_off_requests add column if not exists hours_worked numeric(6,2);
+-- One-time fix for comp time logged before time and a half: what they entered was the hours worked.
+-- Only touches entries without hours_worked, so running this file again changes nothing.
+update public.time_off_requests set hours_worked = hours, hours = round(hours * 1.5 * 4) / 4
+  where type = 'comp_earned' and hours_worked is null and hours is not null;
 -- When managers were emailed about an off-duty request (so it's only once per request)
 alter table public.offduty_requests add column if not exists managers_alerted_at timestamp with time zone;
 -- Personal calendar events: owner_id set = only that person can see or change it
@@ -928,7 +934,10 @@ begin
     if new.hours is null then
       raise exception 'Enter how many hours.';
     end if;
+    new.hours_worked := case when new.type = 'comp_earned' then coalesce(new.hours_worked, new.hours) end;
     if new.type = 'comp_earned' then
+      -- Comp time is earned at time and a half, rounded to the quarter hour
+      new.hours := round(new.hours_worked * 1.5 * 4) / 4;
       new.end_date := new.start_date;          -- earned on one day
       if coalesce(trim(new.reason), '') = '' then
         raise exception 'Say what the comp time was earned for.';
@@ -947,6 +956,7 @@ begin
   new.start_date := old.start_date;
   new.end_date := old.end_date;
   new.hours := old.hours;
+  new.hours_worked := old.hours_worked;
   new.reason := old.reason;
   new.created_at := old.created_at;
   new.approver_alerted_at := old.approver_alerted_at;

@@ -1184,6 +1184,12 @@
   // What people can ask for now (older requests may have other types; typeLabel still names them)
   const requestTypes = () => [['vacation', 'Vacation'], ['sick', 'Sick'], ['comp', 'Comp time (use)']].filter(([k]) => k !== 'comp' || hasComp(state.profile));
   const isComp = (t) => t === 'comp' || t === 'comp_earned';
+  // Comp time is earned at time and a half, rounded to the quarter hour. The database does the same math (time_off_guard).
+  const COMP_RATE = 1.5;
+  const compCredit = (worked) => Math.round(worked * COMP_RATE * 4) / 4;
+  const compHoursText = (r) => r.hours == null ? '—'
+    : r.type === 'comp_earned' && r.hours_worked != null
+      ? `${hrs(r.hours_worked)} worked × ${COMP_RATE} = ${hrs(r.hours)} comp hours` : hrs(r.hours);
   const hoursText = (r) => r.hours == null
     ? `${dayCount(r.start_date, r.end_date)} day${dayCount(r.start_date, r.end_date) > 1 ? 's' : ''}`
     : `${r.type === 'comp_earned' ? '+' : r.type === 'comp' ? '−' : ''}${hrs(r.hours)} hrs`;
@@ -1267,14 +1273,16 @@
     const MODES = {
       off: { hours: 'Total hours', reason: 'Reason (optional)', placeholder: '', submit: 'Submit request' },
       use: { hours: 'Comp hours to use', reason: 'Reason (optional)', placeholder: '', submit: 'Request comp time off' },
-      earn: { hours: 'Hours earned', reason: 'What for', placeholder: 'e.g. Court after shift, held over on a call', submit: 'Submit comp time earned' }
+      earn: { hours: 'Hours worked', reason: 'What for', placeholder: 'e.g. Court after shift, held over on a call', submit: 'Submit comp time earned' }
     };
     const updateHint = () => {
       hint.classList.remove('error-text');
       const want = Number(form.hours.value) || 0;
       if (mode === 'off') { hint.textContent = 'Total hours: 12 for one shift, 24 for two.'; return; }
       if (mode === 'earn') {
-        hint.textContent = `Added to your balance once approved${want ? ` (${hrs(balance + want)} hrs after)` : ''}.`;
+        hint.textContent = want
+          ? `${hrs(want)} worked × ${COMP_RATE} = ${hrs(compCredit(want))} comp hours once approved (${hrs(balance + compCredit(want))} hrs after).`
+          : `You get time and a half: each hour worked is ${COMP_RATE} comp hours.`;
         return;
       }
       hint.textContent = `You have ${hrs(available)} comp hours you can use${pUse ? ` (${hrs(balance)} minus ${hrs(pUse)} already requested)` : ''}.${want && want <= available ? ` ${hrs(available - want)} left after this.` : ''}`;
@@ -1310,7 +1318,8 @@
         if (mode === 'earn') {
           if (!form.worked.value) throw new Error('Pick the day you worked.');
           if (!form.reason.value.trim()) throw new Error('Say what the comp time was earned for.');
-          row = { type: 'comp_earned', start_date: form.worked.value, end_date: form.worked.value, hours, reason: form.reason.value.trim() };
+          // hours worked; the database credits time and a half
+          row = { type: 'comp_earned', start_date: form.worked.value, end_date: form.worked.value, hours, hours_worked: hours, reason: form.reason.value.trim() };
         } else {
           if (!form.start.value) throw new Error('Pick the first day.');
           if (form.end.value && form.end.value < form.start.value) throw new Error('Last day must be on or after the first day.');
@@ -1320,7 +1329,7 @@
         const { data: req, error } = await sb.from('time_off_requests').insert({ user_id: me(), ...row }).select('id').single();
         if (error) throw error;
         alertApprovers(req.id);
-        toast(mode === 'earn' ? 'Comp time submitted for approval.' : 'Request submitted.');
+        toast(mode === 'earn' ? `${hrs(compCredit(hours))} comp hours submitted for approval.` : 'Request submitted.');
         showView('timeoff');
       });
     };
@@ -1380,7 +1389,7 @@
       <table class="to-table"><tbody>
         ${row('Type', esc(typeLabel(r.type)))}
         ${row(earned ? 'Day worked' : 'Dates', esc(earned ? fmtDate(r.start_date) : dateRange(r.start_date, r.end_date)) + (earned ? '' : ` (${days} day${days > 1 ? 's' : ''})`))}
-        ${row('Hours', r.hours == null ? '—' : esc(hrs(r.hours)))}
+        ${row('Hours', esc(compHoursText(r)))}
         ${row(earned ? 'What for' : 'Reason', esc(r.reason || '—'))}
         ${row('Requested', esc(fmtDateTime(r.created_at)))}
         ${row('Status', esc(r.status[0].toUpperCase() + r.status.slice(1)))}
@@ -1402,7 +1411,7 @@
         <dl class="details">
           <dt>Type</dt><dd>${esc(typeLabel(r.type))}</dd>
           <dt>${r.type === 'comp_earned' ? 'Day worked' : 'Dates'}</dt><dd>${esc(r.type === 'comp_earned' ? fmtDate(r.start_date) : dateRange(r.start_date, r.end_date))}${r.type === 'comp_earned' ? '' : ` (${dayCount(r.start_date, r.end_date)} day${dayCount(r.start_date, r.end_date) > 1 ? 's' : ''})`}</dd>
-          <dt>Hours</dt><dd>${r.hours == null ? '—' : esc(hrs(r.hours))}</dd>
+          <dt>Hours</dt><dd>${esc(compHoursText(r))}</dd>
           <dt>${r.type === 'comp_earned' ? 'What for' : 'Reason'}</dt><dd>${esc(r.reason || '—')}</dd>
           ${isComp(r.type) ? '<dt>Comp balance</dt><dd id="to-bal">…</dd>' : ''}
           <dt>Requested</dt><dd>${esc(fmtDateTime(r.created_at))}</dd>

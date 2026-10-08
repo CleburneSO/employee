@@ -84,7 +84,9 @@ Deno.serve(async (req) => {
       `<strong>${esc(name)}</strong> ${earned ? 'logged comp time earned' : 'requested time off'}.`,
       `${earned ? 'Day worked' : 'Dates'}: <strong>${esc(when)}</strong>`,
       `Type: ${esc(type)}`,
-      `Hours: ${esc(r.hours ?? '—')}`,
+      earned && r.hours_worked != null
+        ? `Hours: ${esc(r.hours_worked)} worked × 1.5 = <strong>${esc(r.hours)} comp hours</strong>`
+        : `Hours: ${esc(r.hours ?? '—')}`,
       r.reason ? `${earned ? 'What for' : 'Reason'}: “${esc(r.reason)}”` : '',
       'Approve or deny it on the Approvals tab.'
     ], 'Review it');
