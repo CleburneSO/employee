@@ -976,3 +976,19 @@ table.entry td.note-cell { display: none; }
   table.entry tr.note-open .note-btn { visibility: hidden; }
   table.entry tr:not(.note-open) td.expl-cell { display: none; }
 }
+
+/* ---------------- employee profile (manager view) ---------------- */
+.name-link { padding: 0; font-weight: 600; text-align: left; }
+.pf-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: .75rem 1rem; }
+.pf-head h2 { margin: 0 0 .15rem; }
+.pf-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .55rem; }
+.pf-off { flex-basis: 100%; margin: 0; }
+.pf-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .75rem; margin-bottom: 1rem; }
+.pf-tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: .85rem 1rem; display: flex; flex-direction: column; gap: .2rem; }
+.pf-tile-title { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.pf-tile-big { font-size: 1.45rem; font-weight: 800; color: var(--primary); font-variant-numeric: tabular-nums; }
+.pf-tile-big small { font-size: .85rem; font-weight: 600; color: var(--muted); }
+.pf-tile-big .badge { font-size: .85rem; vertical-align: middle; }
+.pf-tile .hint { margin: 0; }
+.pf-tile-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: auto; padding-top: .45rem; }
+@media (max-width: 760px) { .pf-tiles { grid-template-columns: 1fr 1fr; gap: .5rem; } .pf-tile { padding: .7rem .75rem; } .pf-tile-big { font-size: 1.2rem; } }

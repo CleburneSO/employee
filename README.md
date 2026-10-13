@@ -46,7 +46,7 @@ In Supabase **Authentication → URL Configuration**:
    ```sql
    update public.profiles set role = 'manager' where email = 'you@example.com';
    ```
-4. Refresh the site — you'll see the **Approvals** and **Team** tabs.
+4. Refresh the site — you'll see the **Approvals** and **People** tabs.
 
 ### 4b. Make yourself the site owner
 In the **SQL Editor** run (with the email you sign in with):
@@ -61,7 +61,7 @@ The site owner is a manager who also:
 The owner flag can only be set from the SQL Editor, never from the site.
 
 ### 5. Add employees
-Invite each person from **Authentication → Users → Invite user**. They set a password from the email and they're in. You can promote other managers from the **Team** tab.
+Invite each person from **Authentication → Users → Invite user**. They set a password from the email and they're in. You can promote other managers from the **People** tab.
 
 ## How it works
 
@@ -98,10 +98,11 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - Turned off on the jail portal (`uniforms: false`).
 
 **Managers**
-- The manager pages are under the **Admin** tab (a drop-down on a computer, an "Admin" section in the ☰ menu on a phone): Approvals, Payroll & History, Team, and Audit Log for the site owner. Admin and Approvals show how many items are waiting.
+- The manager pages are under the **Admin** tab (a drop-down on a computer, an "Admin" section in the ☰ menu on a phone): Approvals, Payroll & History, People, and Audit Log for the site owner. Admin and Approvals show how many items are waiting.
 - *Approvals:* only what's waiting: who **hasn't submitted a timesheet** (on the last day of a pay period, and after it until everyone's in), pending timesheets and time off. Approve or send back / deny with a note. Open any timesheet, time-off request or comp time entry and click **Print / Save PDF** for a paper copy (employees can print their own too).
-- *Payroll & History:* comp time balances (and adjustments), payroll (pick a pay period and **Print all timesheets**, one page per deputy, or download a CSV), and the approved / denied history of timesheets and time off. Pick a person to see their full history.
-- *Team:* edit names and roles, **Deactivate** people who leave (they're locked out immediately; their records are kept and still searchable; don't delete them in Supabase), and tick which **special duties** each person has. Below that, manage the duty list: short name (K9), the line printed on the timesheet, the small-print note, optional **auto hours** pre-filled each pay period, **Everyone** (show on all timesheets), and **Active** (turn off to retire a duty; old timesheets keep it). It starts with Traffic OT, K9, DEA and Supervisor. Rename or edit them to match your wording.
+- *Payroll & History:* comp time and uniform balances (click a name to open their profile), payroll (pick a pay period and **Print all timesheets**, one page per deputy, or download a CSV), uniform orders to place or receive, and the most recent approved / denied timesheets and time off.
+- *Profiles:* on **People**, click a name (or **Profile**) to see everything for that person in one place: their roles and duties (**Edit**), comp time balance (**Adjust**), uniform allowance (**Adjust**, and **Enter an order** for the sheriff and chief deputy), and all their timesheets, time off and comp time, uniform orders and off-duty jobs. Deactivated people have profiles too.
+- *People:* edit names and roles, **Deactivate** people who leave (they're locked out immediately; their records are kept and still searchable; don't delete them in Supabase), and tick which **special duties** each person has. Below that, manage the duty list: short name (K9), the line printed on the timesheet, the small-print note, optional **auto hours** pre-filled each pay period, **Everyone** (show on all timesheets), and **Active** (turn off to retire a duty; old timesheets keep it). It starts with Traffic OT, K9, DEA and Supervisor. Rename or edit them to match your wording.
 
 ## Good to know
 
@@ -115,7 +116,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 
 ## Inviting from the site (one-time setup)
 
-Managers can invite people from the **Team** tab (name, email, role → **Send invite**). This needs a small function in Supabase, because sending invites requires Supabase's secret key, which must never be in the website:
+Managers can invite people from the **People** tab (name, email, role → **Send invite**). This needs a small function in Supabase, because sending invites requires Supabase's secret key, which must never be in the website:
 
 1. Supabase → **Edge Functions** → **Deploy a new function** → **Via Editor**.
 2. Name it exactly **`invite-user`**.
@@ -159,7 +160,7 @@ Setup (uses your Resend account, with ccsoportal.com verified):
 
 **Timesheet banner:** separately, anyone who hasn't submitted sees a banner at the top of the site on the last day of the pay period, and after it ends until they submit, with a **Fill it out** button.
 
-**Time-off approvers:** on the **Team** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request and every off-duty job request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
+**Time-off approvers:** on the **People** tab, open the sheriff and the chief deputy and tick **Approves time off** (managers only). They get an email for every time-off and comp time request and every off-duty job request, and only they can approve or deny time off; other managers can see requests but not decide them. The database enforces this. If nobody is ticked, any manager can approve and every manager gets the email, so requests never get stuck.
 
 The same people approve who works **off-duty jobs**, and only they (or the site owner) can tick or untick **Approves time off**, or change the role or account of someone who approves. That lets you make **clerks** managers without approvals: they see everything managers see, approve timesheets, edit the team, post events and print payroll, but they can't approve time off, comp time, uniform orders or off-duty jobs, and they can't give themselves that right. Leave **Approves time off** unticked for them.
 
@@ -167,7 +168,7 @@ If alerts aren't set up, everything still saves; the site shows a one-time note 
 
 ## Jail portal (`/jail/`)
 
-The Cleburne County Jail has its own portal at `ccsoportal.com/jail/`. It's the same app (`app.js`, `style.css`) with its own `jail/config.js` and **its own Supabase project**, so jail logins, records, approvals and audit log are completely separate from the Sheriff's Office. It has only the calendar, timesheets and time off (`FEATURES` in `jail/config.js` turns off case numbers, patrol stats and off-duty jobs; comp time is only for people ticked **Has comp time** on the Team tab, e.g. the jail administrator), prints **CLEBURNE COUNTY JAIL** on timesheets, and shows a "Jail" label. Managers see a link to the other portal in the Admin menu.
+The Cleburne County Jail has its own portal at `ccsoportal.com/jail/`. It's the same app (`app.js`, `style.css`) with its own `jail/config.js` and **its own Supabase project**, so jail logins, records, approvals and audit log are completely separate from the Sheriff's Office. It has only the calendar, timesheets and time off (`FEATURES` in `jail/config.js` turns off case numbers, patrol stats and off-duty jobs; comp time is only for people ticked **Has comp time** on the People tab, e.g. the jail administrator), prints **CLEBURNE COUNTY JAIL** on timesheets, and shows a "Jail" label. Managers see a link to the other portal in the Admin menu.
 
 One-time setup:
 1. **supabase.com → New project** (e.g. "CCSO Jail").
@@ -177,7 +178,7 @@ One-time setup:
    **Authentication → Emails → Templates:** paste `jail/email-invite.html` into **Invite user** and `jail/email-reset-password.html` into **Reset password** (each file's top lines give the subject to use).
 5. **SQL Editor:** run `timesheet-reminder.sql` and `event-reminder.sql`, after changing the address on the line marked ▼ near the top of each to the jail project's address (Project Settings → Data API → Project URL).
 6. **`jail/config.js`:** paste the jail project's URL and anon / publishable key over `YOUR-PROJECT` / `YOUR-ANON-KEY`.
-7. **Invite** the jail administrator, then run in the jail project's SQL Editor: `update public.profiles set role = 'manager', timeoff_approver = true where email = '…';` (do the same for the sheriff, without `timeoff_approver` if he shouldn't get the emails). Optionally make yourself site owner there too (`is_owner = true`). Then invite jail staff from the Team tab.
+7. **Invite** the jail administrator, then run in the jail project's SQL Editor: `update public.profiles set role = 'manager', timeoff_approver = true where email = '…';` (do the same for the sheriff, without `timeoff_approver` if he shouldn't get the emails). Optionally make yourself site owner there too (`is_owner = true`). Then invite jail staff from the People tab.
 8. Ask for the "Jail portal" link to be turned on in the Sheriff's Office `config.js` (`OTHER_PORTAL: { label: 'Jail portal', url: 'jail/' }`).
 
 When updating the site, bump the `?v=` version in **both** `index.html` and `jail/index.html`.

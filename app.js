@@ -19,7 +19,7 @@
   // e.g. the jail portal turns off case numbers, patrol stats and off-duty jobs.
   const FEATURES = { cases: true, stats: true, offduty: true, comp: true, uniforms: true, ...(cfg.FEATURES || {}) };
   const on = (f) => FEATURES[f] !== false;
-  // Comp time: everyone (true), nobody (false), or only people ticked "Has comp time" on the Team tab ('ticked')
+  // Comp time: everyone (true), nobody (false), or only people ticked "Has comp time" on the People tab ('ticked')
   const compPerPerson = FEATURES.comp === 'ticked';
   const hasComp = (p) => on('comp') && (!compPerPerson || !!p?.comp_time);
   const PORTAL_LABEL = cfg.PORTAL_LABEL || '';   // e.g. "Jail", shown next to the logo
@@ -79,7 +79,7 @@
   const me = () => state.session.user.id;
   const isManager = () => state.profile?.role === 'manager';
   const isOwner = () => isManager() && !!state.profile?.is_owner;   // site owner: set only from the Supabase SQL Editor
-  // Time off is approved by managers ticked "Approves time off" on the Team tab (the sheriff and chief deputy).
+  // Time off is approved by managers ticked "Approves time off" on the People tab (the sheriff and chief deputy).
   // If nobody is ticked, any manager can (the database applies the same rule).
   const timeOffApprovers = () => Object.values(state.people).filter((p) => p.role === 'manager' && p.active !== false && p.timeoff_approver);
   const canApproveTimeOff = () => isManager() && (!!state.profile?.timeoff_approver || !timeOffApprovers().length);
@@ -480,10 +480,10 @@
     if (on('offduty')) tabs.push(['offduty', 'Off-Duty Jobs']);
     // Manager pages sit under one "Admin" drop-down
     const admin = [];
-    if (isManager()) admin.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'Team']);
+    if (isManager()) admin.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'People']);
     if (isOwner()) admin.push(['audit', 'Audit Log']);
     state.adminViews = admin.map(([k]) => k);
-    if (![...tabs, ...admin].some(([k]) => k === state.view)) state.view = 'calendar';
+    if (![...tabs, ...admin].some(([k]) => k === state.view) && !(state.view === 'person' && isManager())) state.view = 'calendar';
     const tabBtn = ([k, l]) => `<button type="button" data-view="${k}" data-label="${esc(l)}">${esc(l)}${k === 'review' ? ' <span class="count tab-count" hidden></span>' : ''}</button>`;
 
     app.innerHTML = `
@@ -581,8 +581,9 @@
     state.flushDraft?.();
     state.view = v;
     refreshDue();
-    $$('.tabs button[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
-    $('.tab-group-toggle')?.classList.toggle('active', (state.adminViews || []).includes(v));
+    const tab = v === 'person' ? 'team' : v;   // a profile belongs to People
+    $$('.tabs button[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === tab));
+    $('.tab-group-toggle')?.classList.toggle('active', (state.adminViews || []).includes(tab));
     const cur = $('.menu-current');
     if (cur) cur.textContent = $('.tabs button[data-view].active')?.dataset.label || '';
     refreshAdminCount();
@@ -1045,9 +1046,9 @@
   function timesheetTable(list, mgr) {
     if (!list.length) return '<p class="muted">Nothing here yet.</p>';
     return `<div class="table-wrap"><table class="list">
-      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Pay period</th><th class="num">Worked</th><th>Special / grant OT</th><th class="num">To be paid</th><th>Status</th><th>Signed</th><th></th></tr></thead>
+      <thead><tr>${mgr && mgr !== 'person' ? '<th>Employee</th>' : ''}<th>Pay period</th><th class="num">Worked</th><th>Special / grant OT</th><th class="num">To be paid</th><th>Status</th><th>Signed</th><th></th></tr></thead>
       <tbody>${list.map((t) => `<tr>
-        ${mgr ? `<td>${esc(personName(t.user_id, 'Unknown'))}</td>` : ''}
+        ${mgr && mgr !== 'person' ? `<td>${esc(personName(t.user_id, 'Unknown'))}</td>` : ''}
         <td>${esc(periodLabel(t.period_start))}</td>
         <td class="num">${hrs(t.total_hours)}</td>
         <td>${dutyChips(t) || '<span class="muted">—</span>'}</td>
@@ -1340,14 +1341,14 @@
   function timeOffTable(list, mgr) {
     if (!list.length) return '<p class="muted">Nothing here yet.</p>';
     return `<div class="table-wrap"><table class="list">
-      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Dates</th><th class="num">Hours</th><th>Type</th><th>Status</th><th>Note</th><th></th></tr></thead>
+      <thead><tr>${mgr && mgr !== 'person' ? '<th>Employee</th>' : ''}<th>Dates</th><th class="num">Hours</th><th>Type</th><th>Status</th><th>Note</th><th></th></tr></thead>
       <tbody>${list.map((r) => {
         let action = '';
         if (mgr && r.status === 'pending' && canApproveTimeOff()) action = `<button class="btn small" data-to="${r.id}">Review</button>`;
         else if (mgr) action = `<button class="btn small" data-to="${r.id}">View</button>`;
         else action = `${r.status === 'pending' ? `<button class="btn small" data-cancel="${r.id}">Cancel</button> ` : ''}<button class="btn small" data-to="${r.id}">View</button>`;
         return `<tr class="${r.type === 'comp_earned' ? 'is-earned' : ''}">
-          ${mgr ? `<td>${esc(personName(r.user_id, 'Unknown'))}</td>` : ''}
+          ${mgr && mgr !== 'person' ? `<td>${esc(personName(r.user_id, 'Unknown'))}</td>` : ''}
           <td>${esc(r.type === 'comp_earned' ? fmtDate(r.start_date) : dateRange(r.start_date, r.end_date))}</td>
           <td class="num">${esc(hoursText(r))}</td>
           <td>${esc(typeLabel(r.type))}</td>
@@ -1454,9 +1455,9 @@
   function uniformTable(list, mgr) {
     if (!list.length) return '<p class="muted">Nothing here yet.</p>';
     return `<div class="table-wrap"><table class="list">
-      <thead><tr>${mgr ? '<th>Employee</th>' : ''}<th>Requested</th><th>Items</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead>
+      <thead><tr>${mgr && mgr !== 'person' ? '<th>Employee</th>' : ''}<th>Requested</th><th>Items</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead>
       <tbody>${list.map((o) => `<tr>
-        ${mgr ? `<td>${esc(personName(o.user_id, 'Unknown'))}</td>` : ''}
+        ${mgr && mgr !== 'person' ? `<td>${esc(personName(o.user_id, 'Unknown'))}</td>` : ''}
         <td>${esc(fmtShort(isoDate(new Date(o.created_at))))}</td>
         <td class="note">${esc(uniformSummary(o))}</td>
         <td class="num">${money(uniformAmount(o))}</td>
@@ -1670,6 +1671,12 @@
       $('#uo-submit').textContent = forId === me() ? 'Submit request' : 'Save approved order';
       recalc();
     });
+    if (state.uoFor && $('#uo-for') && others.some((x) => x.user_id === state.uoFor)) {
+      $('#uo-for').value = state.uoFor;
+      $('#uo-for').dispatchEvent(new Event('change'));
+      $('#uo-for').scrollIntoView({ block: 'center' });
+    }
+    state.uoFor = null;
     $('#uo-add').onclick = () => { $('#uo-rows').insertAdjacentHTML('beforeend', lineRow()); $('#uo-rows tr:last-child .uo-item').focus(); };
     $('#uo-rows').addEventListener('click', (e) => {
       if (!e.target.closest('.uo-del')) return;
@@ -1756,71 +1763,55 @@
 
   /* ---------------- manager: payroll & history ---------------- */
   views.payroll = async (el) => {
-    const people = await loadPeople();
-    const who = state.people[state.filterUser] ? state.filterUser : '';
-    state.filterUser = who;
-    // When a person is picked, show only them and their full history
-    const q = (table) => { let x = sb.from(table).select('*'); if (who) x = x.eq('user_id', who); return x; };
-    const recent = (x) => who ? x : x.limit(25);
+    await loadPeople();
     const [tsDone, toDone, bals, uBals, uOpen, uDone] = await Promise.all([
-      recent(q('timesheets').neq('status', 'submitted').order('period_start', { ascending: false })),
-      recent(q('time_off_requests').neq('status', 'pending').order('start_date', { ascending: false })),
+      sb.from('timesheets').select('*').neq('status', 'submitted').order('period_start', { ascending: false }).limit(25),
+      sb.from('time_off_requests').select('*').neq('status', 'pending').order('start_date', { ascending: false }).limit(25),
       compBalances(),
       on('uniforms') ? uniformBalances() : [],
       // approved orders still to place with Galls or still to arrive
-      on('uniforms') ? q('uniform_orders').eq('status', 'approved').is('received_at', null).order('reviewed_at') : { data: [] },
-      on('uniforms') ? recent(q('uniform_orders').neq('status', 'pending').order('created_at', { ascending: false })) : { data: [] }
+      on('uniforms') ? sb.from('uniform_orders').select('*').eq('status', 'approved').is('received_at', null).order('reviewed_at') : { data: [] },
+      on('uniforms') ? sb.from('uniform_orders').select('*').neq('status', 'pending').order('created_at', { ascending: false }).limit(25) : { data: [] }
     ]);
     for (const r of [tsDone, toDone, uOpen, uDone]) if (r.error) throw r.error;
-    const uRows = uBals.filter((b) => (who ? b.user_id === who : b.active !== false));
-    const compRows = bals.filter((b) => (who ? b.user_id === who : b.active !== false) && (!compPerPerson || state.people[b.user_id]?.comp_time));
-    const forWho = who ? ` — ${esc(personName(who))}` : '';
+    const uRows = uBals.filter((b) => b.active !== false);
+    const compRows = bals.filter((b) => b.active !== false && (!compPerPerson || state.people[b.user_id]?.comp_time));
+    // Names open the person's profile, where their history and the Adjust buttons are
+    const nameBtn = (id, name) => `<button type="button" class="btn-link name-link" data-person="${esc(id)}">${esc(name || personName(id))}</button>`;
 
     el.innerHTML = `
-      <section class="card filter-bar">
-        <label>Show person
-          <select id="f-person">
-            <option value="">Everyone</option>
-            ${people.map((p) => `<option value="${p.id}" ${p.id === who ? 'selected' : ''}>${esc(p.full_name || p.email)}${p.active === false ? ' (deactivated)' : ''}</option>`).join('')}
-          </select>
-        </label>
-        ${who ? '<button class="btn" id="f-clear">Show everyone</button>' : ''}
-        <p class="hint">${who ? 'Showing all of this person’s timesheets and time off.' : 'Pick a person to see their full history. Tip: click the list and start typing a name.'}</p>
-      </section>
+      <p class="hint">To see everything for one person (or adjust a balance), open them on <button class="btn-link" type="button" id="go-people">People</button>.</p>
       ${on('comp') && (!compPerPerson || compRows.length) ? `<section class="card">
-        <details class="fold" ${who ? 'open' : ''}>
-          <summary><h2>Comp time balances${forWho}</h2></summary>
-          <p class="muted">Balance = approved comp earned − approved comp used + adjustments. Use <strong>Adjust</strong> to enter someone’s starting balance or fix a mistake.</p>
+        <details class="fold">
+          <summary><h2>Comp time balances</h2></summary>
           <div class="table-wrap"><table class="list">
-            <thead><tr><th>Name</th><th class="num">Balance</th><th class="num">Pending earned</th><th class="num">Pending used</th><th></th></tr></thead>
-            <tbody>${compRows.map((b) => `<tr data-id="${b.user_id}"><td>${esc(b.full_name || personName(b.user_id))}</td>
+            <thead><tr><th>Name</th><th class="num">Balance</th><th class="num">Pending earned</th><th class="num">Pending used</th></tr></thead>
+            <tbody>${compRows.map((b) => `<tr><td>${nameBtn(b.user_id, b.full_name)}</td>
               <td class="num"><strong>${hrs(b.balance)}</strong></td>
               <td class="num">${Number(b.pending_earned) ? '+' + hrs(b.pending_earned) : '—'}</td>
-              <td class="num">${Number(b.pending_used) ? '−' + hrs(b.pending_used) : '—'}</td>
-              <td class="right"><button class="btn small comp-adj">Adjust</button></td></tr>`).join('')}</tbody>
+              <td class="num">${Number(b.pending_used) ? '−' + hrs(b.pending_used) : '—'}</td></tr>`).join('')}</tbody>
           </table></div>
           <button class="btn small" id="comp-csv" type="button">Download CSV</button>
         </details>
       </section>` : ''}
       ${on('uniforms') ? `<section class="card">
-        <details class="fold" ${who ? 'open' : ''}>
-          <summary><h2>Uniform allowance${forWho}</h2></summary>
-          <p class="muted">${esc(fyLabel(uBals[0]?.fy_start))}. Everyone gets ${money(uBals[0]?.allowance ?? 500)}, reset every October 1. Use <strong>Adjust</strong> to enter what someone already spent on paper this year, or to fix a mistake.</p>
+        <details class="fold">
+          <summary><h2>Uniform allowance</h2></summary>
+          <p class="muted">${esc(fyLabel(uBals[0]?.fy_start))}. Everyone gets ${money(uBals[0]?.allowance ?? 500)}, reset every October 1.</p>
           <div class="table-wrap"><table class="list">
-            <thead><tr><th>Name</th><th class="num">Left</th><th class="num">Spent</th><th class="num">Waiting</th><th class="num">Adjusted</th><th></th></tr></thead>
-            <tbody>${uRows.map((b) => `<tr data-id="${b.user_id}"><td>${esc(b.full_name || personName(b.user_id))}</td>
+            <thead><tr><th>Name</th><th class="num">Left</th><th class="num">Spent</th><th class="num">Waiting</th><th class="num">Adjusted</th></tr></thead>
+            <tbody>${uRows.map((b) => `<tr><td>${nameBtn(b.user_id, b.full_name)}</td>
               <td class="num"><strong>${money(b.balance)}</strong></td><td class="num">${money(b.spent)}</td>
-              <td class="num">${Number(b.pending) ? money(b.pending) : '—'}</td><td class="num">${Number(b.adjusted) ? money(b.adjusted) : '—'}</td>
-              <td class="right"><button class="btn small uo-adj">Adjust</button></td></tr>`).join('')}</tbody>
+              <td class="num">${Number(b.pending) ? money(b.pending) : '—'}</td><td class="num">${Number(b.adjusted) ? money(b.adjusted) : '—'}</td></tr>`).join('')}</tbody>
           </table></div>
           <button class="btn small" id="uo-csv" type="button">Download CSV</button>
         </details>
-        <h3 style="margin-top:1rem">Approved orders to place or receive${forWho}</h3>
+        <h3 style="margin-top:1rem">Approved orders to place or receive</h3>
         <div id="uo-open">${uniformTable(uOpen.data, true)}</div>
-        <details class="fold"><summary><h3>${who ? 'All uniform orders' : 'Recent uniform orders'}${forWho}</h3></summary>
+        <details class="fold"><summary><h3>Recent uniform orders</h3></summary>
           <div id="uo-done">${uniformTable(uDone.data, true)}</div></details>
       </section>` : ''}
-      <section class="card"><h2>Payroll: print or export a pay period${forWho}</h2>
+      <section class="card"><h2>Payroll: print or export a pay period</h2>
         <form id="exp" class="row end">
           <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
           <label>Include<select id="exp-status"><option value="approved">Approved only</option><option value="all">All statuses</option></select></label>
@@ -1830,12 +1821,10 @@
           <button class="btn primary" id="exp-print">Print all timesheets</button>
           <button class="btn" id="exp-csv">Download CSV</button>
         </div></section>
-      <section class="card"><h2>${who ? 'All timesheets' + forWho : 'Recent timesheets'}</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div></section>
-      <section class="card"><h2>${who ? 'All time off' + forWho : 'Recent time off'}</h2><div id="to-done">${timeOffTable(toDone.data, true)}</div></section>`;
+      <section class="card"><h2>Recent timesheets</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div></section>
+      <section class="card"><h2>Recent time off</h2><div id="to-done">${timeOffTable(toDone.data, true)}</div></section>`;
 
-    $('#f-person').onchange = (e) => { state.filterUser = e.target.value; showView('payroll'); };
-    if (who) $('#f-clear').onclick = () => { state.filterUser = ''; showView('payroll'); };
-
+    $('#go-people').onclick = () => showView('team');
     bindTimesheetButtons($('#ts-done'), tsDone.data);
     bindTimeOffButtons($('#to-done'), toDone.data);
 
@@ -1846,78 +1835,15 @@
         ['Name', 'Allowance year starts', 'Allowance', 'Adjusted', 'Spent (approved)', 'Waiting for approval', 'Left'],
         ...uRows.map((b) => [b.full_name, b.fy_start, Number(b.allowance), Number(b.adjusted), Number(b.spent), Number(b.pending), Number(b.balance)])
       ]);
-      $$('.uo-adj', el).forEach((btn) => {
-        btn.onclick = () => {
-          const b = uRows.find((x) => x.user_id === btn.closest('tr').dataset.id);
-          openModal(`
-            <h2 class="modal-head">Adjust uniform allowance — ${esc(b.full_name)}</h2>
-            <p>Left this year: <strong>${money(b.balance)}</strong></p>
-            <form id="uadj-form" autocomplete="off">
-              <div class="row">
-                <label class="narrow">Amount<input type="number" name="amount" step="0.01" inputmode="decimal" required placeholder="e.g. -120 or 50"></label>
-                <label class="grow">Note<input name="note" required placeholder="e.g. Spent on paper in October"></label>
-              </div>
-              <p class="hint" id="uadj-hint">Negative takes money away (already spent), positive adds it. Adjustments can’t be edited or deleted — fix a mistake with another adjustment.</p>
-              <div class="actions"><button class="btn primary" type="submit">Save adjustment</button><button class="btn" type="button" id="uadj-cancel">Cancel</button></div>
-            </form>`);
-          const af = $('#uadj-form');
-          af.amount.oninput = () => { const a = Number(af.amount.value) || 0; $('#uadj-hint').textContent = a ? `They’ll have ${money(Number(b.balance) + a)} left.` : 'Negative takes money away (already spent), positive adds it.'; };
-          $('#uadj-cancel').onclick = closeModal;
-          af.onsubmit = (ev) => {
-            ev.preventDefault();
-            const amount = Math.round(Number(af.amount.value) * 100) / 100;
-            withBusy(af.querySelector('[type=submit]'), async () => {
-              if (!amount) throw new Error('Enter an amount that isn’t 0 (for example -120 or 50).');
-              const { error } = await sb.from('uniform_adjustments').insert({ user_id: b.user_id, amount, note: af.note.value.trim() });
-              if (error) throw error;
-              closeModal();
-              toast('Allowance adjusted.');
-              showView('payroll');
-            });
-          };
-        };
-      });
     }
     if ($('#comp-csv')) $('#comp-csv').onclick = () => downloadCSV(`comp-balances-${localToday()}.csv`, [
       ['Name', 'Balance', 'Earned (approved)', 'Used (approved)', 'Adjustments', 'Pending earned', 'Pending used'],
       ...compRows.map((b) => [b.full_name, Number(b.balance), Number(b.earned), Number(b.used), Number(b.adjusted), Number(b.pending_earned), Number(b.pending_used)])
     ]);
-    $$('.comp-adj', el).forEach((btn) => {
-      btn.onclick = () => {
-        const b = compRows.find((x) => x.user_id === btn.closest('tr').dataset.id);
-        openModal(`
-          <h2 class="modal-head">Adjust comp time — ${esc(b.full_name)}</h2>
-          <p>Current balance: <strong>${esc(hrs(b.balance))} hrs</strong></p>
-          <form id="adj-form" autocomplete="off">
-            <div class="row">
-              <label class="narrow">Hours<input type="number" name="hours" step="0.25" inputmode="decimal" required placeholder="e.g. 24 or -4"></label>
-              <label class="grow">Note<input name="note" required placeholder="e.g. Starting balance from paper records"></label>
-            </div>
-            <p class="hint" id="adj-hint">Positive adds hours, negative takes them away. Adjustments can’t be edited or deleted — fix a mistake with another adjustment.</p>
-            <div class="actions"><button class="btn primary" type="submit">Save adjustment</button><button class="btn" type="button" id="adj-cancel">Cancel</button></div>
-          </form>`);
-        const f = $('#adj-form');
-        f.hours.oninput = () => { const h = Number(f.hours.value) || 0; $('#adj-hint').textContent = h ? `New balance will be ${hrs(Number(b.balance) + h)} hrs.` : 'Positive adds hours, negative takes them away.'; };
-        $('#adj-cancel').onclick = closeModal;
-        f.onsubmit = (e) => {
-          e.preventDefault();
-          const hours = Number(f.hours.value);
-          withBusy(f.querySelector('[type=submit]'), async () => {
-            if (!hours || !isHalfStep(Math.abs(hours))) throw new Error('Hours must be in quarter-hour steps and not 0 (for example 24, 2.5 or -4).');
-            const { error } = await sb.from('comp_adjustments').insert({ user_id: b.user_id, hours, note: f.note.value.trim() });
-            if (error) throw error;
-            closeModal();
-            toast('Comp balance adjusted.');
-            showView('payroll');
-          });
-        };
-      };
-    });
 
     async function fetchPeriod() {
       const p = $('#exp-period').value;
       let q = sb.from('timesheets').select('*').eq('period_start', p);
-      if (who) q = q.eq('user_id', who);
       if ($('#exp-status').value === 'approved') q = q.eq('status', 'approved');
       const { data, error } = await q;
       if (error) throw error;
@@ -3008,12 +2934,12 @@
           <tbody>${shifts.map((r) => `<tr class="${r.shift === myShift ? 'is-me' : ''}"><td>${esc(r.shift)} Shift${r.shift === myShift ? ' (yours)' : ''}</td>${statsCells(r)}</tr>`).join('')}</tbody>
         </table></div>` : '<p class="muted">Nothing logged for this month yet.</p>'}
         ${!mgr ? '<p class="hint">Your whole shift’s totals. Other deputies’ numbers aren’t shown.</p>' : ''}
-      </section>` : (patrol && !myShift ? `<section class="card"><p class="muted">Ask a manager to set your shift (A or B) on the Team tab to see your shift’s totals.</p></section>` : '')}
+      </section>` : (patrol && !myShift ? `<section class="card"><p class="muted">Ask a manager to set your shift (A or B) on the People tab to see your shift’s totals.</p></section>` : '')}
 
       ${sup && !mgr ? `<section class="card">
         <h2>Deputies under me, ${esc(monthName(month))}</h2>
         ${deputyTable(underMe, false)}
-        <p class="hint">Managers choose who reports to you on the Team tab.</p>
+        <p class="hint">Managers choose who reports to you on the People tab.</p>
       </section>` : ''}
 
       ${mgr ? `<section class="card">
@@ -3022,7 +2948,7 @@
           <button class="btn small" id="st-csv" type="button">Download CSV</button>
         </div>
         ${deputyTable(everyone, true)}
-        <p class="hint">Only people marked Patrol on the Team tab are counted.</p>
+        <p class="hint">Only people marked Patrol on the People tab are counted.</p>
       </section>` : ''}`;
 
     $('#st-month').onchange = (e) => { st.month = e.target.value; showView('stats'); };
@@ -3253,7 +3179,302 @@
     });
   };
 
+  /* ---------------- manager: one person's profile (everything about them in one place) ---------------- */
+  function openProfile(id) {
+    state.profileId = id;
+    showView('person');
+    window.scrollTo(0, 0);
+  }
+  // Any name button with data-person opens that profile
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-person]');
+    if (b && isManager()) { e.preventDefault(); openProfile(b.dataset.person); }
+  });
+
+  views.person = async (el) => {
+    await loadPeople();
+    const id = state.profileId, p = state.people[id];
+    if (!p) { el.innerHTML = '<section class="card"><p>That person wasn’t found.</p><button class="btn" id="pf-back">← People</button></section>'; $('#pf-back').onclick = () => showView('team'); return; }
+    const comp = hasComp(p), uni = on('uniforms'), od = on('offduty');
+    const [ts, to, cBals, cAdj, uBals, uOrd, uAdj, odReq, duties, assigns] = await Promise.all([
+      sb.from('timesheets').select('*').eq('user_id', id).order('period_start', { ascending: false }),
+      sb.from('time_off_requests').select('*').eq('user_id', id).order('start_date', { ascending: false }),
+      comp ? compBalances() : [],
+      comp ? sb.from('comp_adjustments').select('*').eq('user_id', id).order('created_at', { ascending: false }) : { data: [] },
+      uni ? uniformBalances() : [],
+      uni ? sb.from('uniform_orders').select('*').eq('user_id', id).order('created_at', { ascending: false }) : { data: [] },
+      uni ? sb.from('uniform_adjustments').select('*').eq('user_id', id).order('created_at', { ascending: false }) : { data: [] },
+      od ? sb.from('offduty_requests').select('*').eq('user_id', id).order('created_at', { ascending: false }) : { data: [] },
+      loadDuties(), loadAssignments()
+    ]);
+    for (const r of [ts, to, cAdj, uOrd, uAdj, odReq]) if (r.error) throw r.error;
+    let jobs = {};
+    if (odReq.data.length) {
+      const j = await sb.from('offduty_jobs').select('*').in('id', [...new Set(odReq.data.map((r) => r.job_id))]);
+      if (j.error) throw j.error;
+      jobs = Object.fromEntries(j.data.map((x) => [x.id, x]));
+    }
+    const cb = cBals.find((b) => b.user_id === id);
+    const ub = uBals.find((b) => b.user_id === id);
+    const fy = ub?.fy_start;
+    const myDuties = duties.filter((d) => d.active && !d.everyone && assigns.some((a) => a.user_id === id && a.duty_id === d.id));
+    const waitingTs = ts.data.filter((t) => t.status === 'submitted').length;
+    const waitingTo = to.data.filter((r) => r.status === 'pending').length;
+    const waitingUo = uOrd.data.filter((o) => o.status === 'pending').length;
+    const chips = [
+      p.role === 'manager' ? 'Manager' : 'Employee',
+      p.timeoff_approver ? 'Approves time off' : '',
+      on('stats') && p.patrol ? `Patrol${p.shift ? ' · ' + p.shift + ' Shift' : ''}` : '',
+      on('stats') && p.is_supervisor ? 'Supervisor' : '',
+      on('stats') && p.reports_to ? `Reports to ${personName(p.reports_to)}` : '',
+      ...myDuties.map((d) => d.name)
+    ].filter(Boolean);
+    const tile = (title, big, sub, buttons = '') => `<div class="pf-tile"><div class="pf-tile-title">${title}</div>
+      <div class="pf-tile-big">${big}</div>${sub ? `<div class="hint">${sub}</div>` : ''}${buttons ? `<div class="pf-tile-actions">${buttons}</div>` : ''}</div>`;
+    const ago = (d) => esc(fmtShort(isoDate(new Date(d))));
+
+    el.innerHTML = `
+      <button class="btn-link" type="button" id="pf-back">← People</button>
+      <section class="card pf-head">
+        <div class="pf-name">
+          <h2>${esc(p.full_name || '(no name)')}</h2>
+          <div class="muted">${esc(p.email || '')}</div>
+          <div class="pf-chips">${chips.map((c) => `<span class="chip">${esc(c)}</span>`).join(' ')}</div>
+        </div>
+        <div class="pf-head-actions"><button class="btn" id="pf-edit" type="button">Edit</button></div>
+        ${p.active === false ? `<p class="notice warn pf-off">Deactivated ${esc(fmtDateTime(p.deactivated_at))}. They can’t sign in. <button class="btn small" id="pf-reactivate" type="button">Reactivate</button></p>` : ''}
+      </section>
+
+      <section class="pf-tiles">
+        ${tile('Timesheets', waitingTs ? `${waitingTs} waiting` : (ts.data[0] ? badge(ts.data[0].status) : '—'),
+          ts.data[0] ? `Latest: ${esc(periodLabel(ts.data[0].period_start))}` : 'None yet')}
+        ${tile('Time off', waitingTo ? `${waitingTo} pending` : 'None pending', `${to.data.filter((r) => r.type !== 'comp_earned' && r.status === 'approved').length} approved in all`)}
+        ${comp ? tile('Comp time', `${hrs(cb?.balance || 0)} <small>hrs</small>`,
+          Number(cb?.pending_earned) || Number(cb?.pending_used) ? `Waiting: ${Number(cb.pending_earned) ? '+' + hrs(cb.pending_earned) : ''}${Number(cb.pending_earned) && Number(cb.pending_used) ? ', ' : ''}${Number(cb.pending_used) ? '−' + hrs(cb.pending_used) : ''}` : 'Nothing waiting',
+          `<button class="btn small" id="pf-comp-adj" type="button">Adjust</button>`) : ''}
+        ${uni ? tile('Uniform allowance', `${money(ub?.balance ?? 0)} <small>left</small>`,
+          `${esc(fyLabel(fy))}${waitingUo ? ` · ${waitingUo} request${waitingUo > 1 ? 's' : ''} waiting` : ''}`,
+          `<button class="btn small" id="pf-uo-adj" type="button">Adjust</button>${canApproveTimeOff() && p.active !== false && id !== me() ? '<button class="btn small" id="pf-uo-new" type="button">Enter an order</button>' : ''}`) : ''}
+      </section>
+
+      <section class="card"><h2>Timesheets <span class="count muted-count">${ts.data.length}</span></h2><div id="pf-ts">${timesheetTable(ts.data, 'person')}</div></section>
+      <section class="card"><h2>${comp ? 'Time off &amp; comp time' : 'Time off'} <span class="count muted-count">${to.data.length}</span></h2>
+        <div id="pf-to">${timeOffTable(to.data, 'person')}</div>
+        ${cAdj.data.length ? `<details class="fold"><summary><h3>Comp time adjustments</h3></summary>
+          <ul class="plain">${cAdj.data.map((a) => `<li>${Number(a.hours) > 0 ? '+' : '−'}${hrs(Math.abs(a.hours))} hrs — ${esc(a.note)} <span class="muted">(${ago(a.created_at)}${a.created_by ? ', ' + esc(personName(a.created_by)) : ''})</span></li>`).join('')}</ul></details>` : ''}
+      </section>
+      ${uni ? `<section class="card"><h2>Uniforms &amp; equipment <span class="count muted-count">${uOrd.data.length}</span></h2>
+        <div id="pf-uo">${uniformTable(uOrd.data, 'person')}</div>
+        ${uAdj.data.length ? `<details class="fold"><summary><h3>Allowance adjustments</h3></summary>
+          <ul class="plain">${uAdj.data.map((a) => `<li>${Number(a.amount) > 0 ? '+' : '−'}${money(Math.abs(a.amount))} — ${esc(a.note)} <span class="muted">(${esc(fyLabel(a.fy_start))}, ${ago(a.created_at)})</span></li>`).join('')}</ul></details>` : ''}
+      </section>` : ''}
+      ${od ? `<section class="card"><h2>Off-duty jobs <span class="count muted-count">${odReq.data.length}</span></h2>
+        ${odReq.data.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Job</th><th>When</th><th>Status</th></tr></thead><tbody>
+          ${odReq.data.map((r) => { const j = jobs[r.job_id] || {}; return `<tr><td>${esc(j.title || 'Removed job')}</td><td>${j.starts_at ? esc(fmtWhen(j.starts_at, j.ends_at, false)) : '—'}</td>
+            <td><span class="badge badge-${r.status === 'requested' ? 'pending' : r.status === 'approved' ? 'approved' : 'denied'}">${esc({ requested: 'Requested', approved: 'Approved', declined: 'Declined', withdrawn: 'Withdrawn' }[r.status] || r.status)}</span></td></tr>`; }).join('')}
+        </tbody></table></div>` : '<p class="muted">Nothing here yet.</p>'}</section>` : ''}`;
+
+    $('#pf-back').onclick = () => showView('team');
+    $('#pf-edit').onclick = (e) => withBusy(e.target, () => editPerson(p));
+    $('#pf-reactivate')?.addEventListener('click', (e) => setActive(e.target, p, true));
+    bindTimesheetButtons($('#pf-ts'), ts.data);
+    bindTimeOffButtons($('#pf-to'), to.data);
+    if (uni) bindUniformButtons($('#pf-uo'), uOrd.data);
+    $('#pf-comp-adj')?.addEventListener('click', () => adjustComp(p, Number(cb?.balance) || 0));
+    $('#pf-uo-adj')?.addEventListener('click', () => adjustUniform(p, Number(ub?.balance) || 0));
+    $('#pf-uo-new')?.addEventListener('click', () => { state.uoFor = id; showView('uniforms'); });
+  };
+
+  // Comp time adjustment (starting balance from paper, or fixing a mistake)
+  function adjustComp(p, balance) {
+    openModal(`
+      <h2 class="modal-head">Adjust comp time — ${esc(p.full_name)}</h2>
+      <p>Current balance: <strong>${esc(hrs(balance))} hrs</strong></p>
+      <form id="adj-form" autocomplete="off">
+        <div class="row">
+          <label class="narrow">Hours<input type="number" name="hours" step="0.25" inputmode="decimal" required placeholder="e.g. 24 or -4"></label>
+          <label class="grow">Note<input name="note" required placeholder="e.g. Starting balance from paper records"></label>
+        </div>
+        <p class="hint" id="adj-hint">Positive adds hours, negative takes them away. Adjustments can’t be edited or deleted — fix a mistake with another adjustment.</p>
+        <div class="actions"><button class="btn primary" type="submit">Save adjustment</button><button class="btn" type="button" id="adj-cancel">Cancel</button></div>
+      </form>`);
+    const f = $('#adj-form');
+    f.hours.oninput = () => { const h = Number(f.hours.value) || 0; $('#adj-hint').textContent = h ? `New balance will be ${hrs(balance + h)} hrs.` : 'Positive adds hours, negative takes them away.'; };
+    $('#adj-cancel').onclick = closeModal;
+    f.onsubmit = (e) => {
+      e.preventDefault();
+      const hours = Number(f.hours.value);
+      withBusy(f.querySelector('[type=submit]'), async () => {
+        if (!hours || !isHalfStep(Math.abs(hours))) throw new Error('Hours must be in quarter-hour steps and not 0 (for example 24, 2.5 or -4).');
+        const { error } = await sb.from('comp_adjustments').insert({ user_id: p.id, hours, note: f.note.value.trim() });
+        if (error) throw error;
+        closeModal();
+        toast('Comp balance adjusted.');
+        showView(state.view);
+      });
+    };
+  }
+
+  // Uniform allowance adjustment (money already spent on paper this year, or fixing a mistake)
+  function adjustUniform(p, balance) {
+    openModal(`
+      <h2 class="modal-head">Adjust uniform allowance — ${esc(p.full_name)}</h2>
+      <p>Left this year: <strong>${money(balance)}</strong></p>
+      <form id="uadj-form" autocomplete="off">
+        <div class="row">
+          <label class="narrow">Amount<input type="number" name="amount" step="0.01" inputmode="decimal" required placeholder="e.g. -120 or 50"></label>
+          <label class="grow">Note<input name="note" required placeholder="e.g. Spent on paper in October"></label>
+        </div>
+        <p class="hint" id="uadj-hint">Negative takes money away (already spent), positive adds it. Adjustments can’t be edited or deleted — fix a mistake with another adjustment.</p>
+        <div class="actions"><button class="btn primary" type="submit">Save adjustment</button><button class="btn" type="button" id="uadj-cancel">Cancel</button></div>
+      </form>`);
+    const af = $('#uadj-form');
+    af.amount.oninput = () => { const a = Number(af.amount.value) || 0; $('#uadj-hint').textContent = a ? `They’ll have ${money(balance + a)} left.` : 'Negative takes money away (already spent), positive adds it.'; };
+    $('#uadj-cancel').onclick = closeModal;
+    af.onsubmit = (ev) => {
+      ev.preventDefault();
+      const amount = Math.round(Number(af.amount.value) * 100) / 100;
+      withBusy(af.querySelector('[type=submit]'), async () => {
+        if (!amount) throw new Error('Enter an amount that isn’t 0 (for example -120 or 50).');
+        const { error } = await sb.from('uniform_adjustments').insert({ user_id: p.id, amount, note: af.note.value.trim() });
+        if (error) throw error;
+        closeModal();
+        toast('Allowance adjusted.');
+        showView(state.view);
+      });
+    };
+  }
+
   /* ---------------- manager: team & special duties ---------------- */
+  // One person's settings, in a pop-up (from People or their profile)
+  async function editPerson(p) {
+    const [duties, assigns] = await Promise.all([loadDuties(), loadAssignments()]);
+    const has = new Set(assigns.map((a) => `${a.user_id}|${a.duty_id}`));
+    const active = duties.filter((d) => d.active);
+    const supervisors = Object.values(state.people).filter((x) => x.active !== false && x.is_supervisor);
+    const self = p.id === me();
+    const dutyBoxes = active.length ? active.map((d) => d.everyone
+      ? `<span class="chip muted-chip" title="Shown on everyone’s timesheet">${esc(d.name)} (all)</span>`
+      : `<label class="chip-check"><input type="checkbox" data-duty="${d.id}" ${has.has(`${p.id}|${d.id}`) ? 'checked' : ''}><span>${esc(d.name)}</span></label>`).join('')
+      : '<span class="muted">None set up yet (see Special duties setup).</span>';
+    const lockApprover = !!p.timeoff_approver && !canSetApprovers();   // e.g. a clerk editing the sheriff
+    openModal(`
+      <h2 class="modal-head">${esc(p.full_name || p.email)}</h2>
+      <form id="person-form" autocomplete="off">
+        <div class="row">
+          <label>Name (prints on timesheets)<input name="full_name" value="${esc(p.full_name)}" required></label>
+          <label>Role<select name="role" ${self ? 'disabled title="You can’t change your own role"' : lockApprover ? 'disabled title="Only the sheriff or chief deputy can change this"' : ''}>
+            <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
+            <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
+          </select></label>
+        </div>
+        <p class="muted" style="margin-top:-.4rem">${esc(p.email)}</p>
+
+        <fieldset class="person-set" id="person-usual">
+          <legend>Usual hours</legend>
+          ${usualPicker(p.usual_in, p.usual_out)}
+          <p class="hint">Shows at the top of the Time in list on their timesheet, so one pick fills in their shift. They can change it too.</p>
+        </fieldset>
+
+        <fieldset class="person-set">
+          <legend>Special duties</legend>
+          <div class="duty-checks">${dutyBoxes}</div>
+        </fieldset>
+
+        ${compPerPerson && 'comp_time' in p ? `<fieldset class="person-set">
+          <legend>Comp time</legend>
+          <label class="check"><input type="checkbox" name="comp_time" ${p.comp_time ? 'checked' : ''}> <span><strong>Has comp time</strong> — can log comp time earned, see their balance and use comp time off.</span></label>
+        </fieldset>` : ''}
+
+        ${'timeoff_approver' in p ? `<fieldset class="person-set">
+          <legend>Time off</legend>
+          <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''} ${canSetApprovers() ? '' : 'disabled'}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.${canSetApprovers() ? '' : ' <em>Only the sheriff or chief deputy can change this.</em>'}</span></label>
+        </fieldset>` : ''}
+
+        <fieldset class="person-set" ${on('stats') ? '' : 'hidden'}>
+          <legend>Patrol stats</legend>
+          <label class="check"><input type="checkbox" name="patrol" ${p.patrol ? 'checked' : ''}> <span><strong>Patrol</strong> — logs stats and shows up in them</span></label>
+          <div class="row">
+            <label>Shift<select name="shift"><option value="">No shift</option>${SHIFTS.map((x) => `<option value="${x}" ${p.shift === x ? 'selected' : ''}>${x} Shift</option>`).join('')}</select></label>
+            <label>Supervisor<select name="reports_to"><option value="">No supervisor</option>${supervisors.filter((x) => x.id !== p.id).map((x) =>
+              `<option value="${x.id}" ${p.reports_to === x.id ? 'selected' : ''}>${esc(x.full_name || x.email)}</option>`).join('')}</select></label>
+          </div>
+          <label class="check"><input type="checkbox" name="is_supervisor" ${p.is_supervisor ? 'checked' : ''}> <span><strong>Supervisor</strong> — sees the stats of deputies who report to them</span></label>
+        </fieldset>
+
+        <div class="actions">
+          <button class="btn primary" type="submit">Save</button>
+          <button class="btn" type="button" id="person-cancel">Cancel</button>
+          ${self || lockApprover ? '' : `<button class="btn danger" type="button" id="person-deactivate" style="margin-left:auto">Deactivate</button>`}
+        </div>
+      </form>`);
+
+    const f = $('#person-form');
+    bindUsualPicker($('#person-usual'));
+    $('#person-cancel').onclick = closeModal;
+    f.onsubmit = (e) => {
+      e.preventDefault();
+      const update = {
+        full_name: f.full_name.value.trim(),
+        patrol: f.patrol.checked,
+        shift: f.shift.value || null,
+        is_supervisor: f.is_supervisor.checked,
+        reports_to: f.reports_to.value || null
+      };
+      if (!self && !lockApprover) update.role = f.role.value;
+      if (f.comp_time) update.comp_time = f.comp_time.checked;
+      if (f.timeoff_approver && !f.timeoff_approver.disabled) {
+        update.timeoff_approver = f.timeoff_approver.checked;
+        if (update.timeoff_approver && (update.role || p.role) !== 'manager') { toast('Only managers can approve time off. Change their role to Manager first.', true); return; }
+      }
+      let usual;
+      try { usual = readUsualPicker($('#person-usual')); } catch (err) { toast(err.message, true); return; }
+      if (!usual) { toast('Pick both times for the custom usual hours, or choose None.', true); return; }
+      Object.assign(update, usual);
+      const checks = $$('input[data-duty]', f);
+      const add = checks.filter((c) => c.checked && !has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
+      const remove = checks.filter((c) => !c.checked && has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
+      withBusy(f.querySelector('[type=submit]'), async () => {
+        if (!update.full_name) throw new Error('Name can’t be empty.');
+        const { error } = await sb.from('profiles').update(update).eq('id', p.id);
+        if (error) throw error;
+        if (add.length) {
+          const r = await sb.from('profile_duties').insert(add.map((duty_id) => ({ user_id: p.id, duty_id })));
+          if (r.error) throw r.error;
+        }
+        if (remove.length) {
+          const r = await sb.from('profile_duties').delete().eq('user_id', p.id).in('duty_id', remove);
+          if (r.error) throw r.error;
+        }
+        if (p.is_supervisor && !update.is_supervisor) {
+          // no longer a supervisor: their deputies now report to no one
+          const r = await sb.from('profiles').update({ reports_to: null }).eq('reports_to', p.id);
+          if (r.error) throw r.error;
+        }
+        if (self) Object.assign(state.profile, update);
+        closeModal();
+        toast('Saved.');
+        showView(state.view);
+      });
+    };
+    $('#person-deactivate')?.addEventListener('click', (e) => setActive(e.target, p, false));
+  }
+
+  function setActive(b, p, activeFlag) {
+    const name = p.full_name || p.email;
+    const msg = activeFlag
+      ? `Reactivate ${name}? They’ll be able to sign in and submit timesheets again.`
+      : `Deactivate ${name}?\n\nThey’ll be locked out right away. Their timesheets and time off are kept. Any timesheet or time off they already submitted stays in Approvals so you can still approve their final pay.`;
+    if (!confirm(msg)) return;
+    withBusy(b, async () => {
+      const { error } = await sb.from('profiles').update({ active: activeFlag }).eq('id', p.id);
+      if (error) throw error;
+      closeModal();
+      toast(activeFlag ? 'Reactivated.' : 'Deactivated.');
+      showView(state.view);
+    });
+  }
+
   views.team = async (el) => {
     const [people, duties, assigns] = await Promise.all([loadPeople(), loadDuties(), loadAssignments()]);
     const has = new Set(assigns.map((a) => `${a.user_id}|${a.duty_id}`));
@@ -3298,7 +3519,8 @@
       </section>
 
       <section class="card">
-        <h2>Team <span class="count muted-count">${current.length}</span></h2>
+        <h2>People <span class="count muted-count">${current.length}</span></h2>
+        <p class="hint">Click a name to see everything for that person: timesheets, time off, comp time${on('uniforms') ? ', uniforms' : ''}${on('offduty') ? ', off-duty jobs' : ''}.</p>
         <div class="filter-bar team-filter">
           <label>Find<input id="tm-q" type="search" placeholder="Name or email" value="${esc(tf.q)}"></label>
           <label>Show<select id="tm-show">${SHOW.map(([k, l]) => `<option value="${k}" ${tf.show === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -3306,11 +3528,11 @@
         <div class="table-wrap"><table class="list team-list">
           <thead><tr><th>Name</th><th>Role</th>${on('stats') ? '<th>Patrol</th>' : ''}<th>Special duties</th><th></th></tr></thead>
           <tbody>${current.map((p) => `<tr data-id="${p.id}">
-            <td><div class="tm-name">${esc(p.full_name || '(no name)')}</div><div class="tm-email">${esc(p.email)}</div></td>
+            <td><div class="tm-name"><button type="button" class="btn-link name-link" data-person="${p.id}">${esc(p.full_name || '(no name)')}</button></div><div class="tm-email">${esc(p.email)}</div></td>
             <td>${roleText(p)}</td>
             ${on('stats') ? `<td>${patrolText(p)}</td>` : ''}
             <td class="tm-duties">${dutyChipsFor(p) || '<span class="muted">—</span>'}</td>
-            <td class="right"><button class="btn small p-edit">Edit</button></td>
+            <td class="right"><button class="btn small" data-person="${p.id}">Profile</button> <button class="btn small p-edit">Edit</button></td>
           </tr>`).join('')}</tbody>
         </table></div>
         <p class="muted hint" id="tm-none" hidden>No one matches.</p>
@@ -3320,11 +3542,11 @@
       ${former.length ? `<section class="card">
         <details class="fold">
           <summary><h2>Deactivated <span class="count muted-count">${former.length}</span></h2></summary>
-          <p class="muted">These people can’t sign in to see or submit anything. Their timesheets and time off are kept — find them on the Approvals tab with <strong>Show person</strong>.</p>
+          <p class="muted">These people can’t sign in to see or submit anything. Their records are kept — click a name to see them.</p>
           <div class="table-wrap"><table class="list">
             <thead><tr><th>Name</th><th>Email</th><th>Deactivated</th><th></th></tr></thead>
             <tbody>${former.map((p) => `<tr data-id="${p.id}">
-              <td>${esc(p.full_name)}</td><td class="muted">${esc(p.email)}</td>
+              <td><button type="button" class="btn-link name-link" data-person="${p.id}">${esc(p.full_name || '(no name)')}</button></td><td class="muted">${esc(p.email)}</td>
               <td>${esc(fmtDateTime(p.deactivated_at))}</td>
               <td class="right"><button class="btn small p-reactivate" data-name="${esc(p.full_name || p.email)}">Reactivate</button></td>
             </tr>`).join('')}</tbody>
@@ -3371,131 +3593,6 @@
         if (error) throw new Error(await functionError(error, 'invite-user'));
         if (data?.error) throw new Error(data.error);
         toast(`Invite sent to ${f.email.value}.`);
-        showView('team');
-      });
-    };
-
-    // One person's settings, in a pop-up
-    const editPerson = (p) => {
-      const self = p.id === me();
-      const dutyBoxes = active.length ? active.map((d) => d.everyone
-        ? `<span class="chip muted-chip" title="Shown on everyone’s timesheet">${esc(d.name)} (all)</span>`
-        : `<label class="chip-check"><input type="checkbox" data-duty="${d.id}" ${has.has(`${p.id}|${d.id}`) ? 'checked' : ''}><span>${esc(d.name)}</span></label>`).join('')
-        : '<span class="muted">None set up yet (see Special duties setup).</span>';
-      const lockApprover = !!p.timeoff_approver && !canSetApprovers();   // e.g. a clerk editing the sheriff
-      openModal(`
-        <h2 class="modal-head">${esc(p.full_name || p.email)}</h2>
-        <form id="person-form" autocomplete="off">
-          <div class="row">
-            <label>Name (prints on timesheets)<input name="full_name" value="${esc(p.full_name)}" required></label>
-            <label>Role<select name="role" ${self ? 'disabled title="You can’t change your own role"' : lockApprover ? 'disabled title="Only the sheriff or chief deputy can change this"' : ''}>
-              <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employee</option>
-              <option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option>
-            </select></label>
-          </div>
-          <p class="muted" style="margin-top:-.4rem">${esc(p.email)}</p>
-
-          <fieldset class="person-set" id="person-usual">
-            <legend>Usual hours</legend>
-            ${usualPicker(p.usual_in, p.usual_out)}
-            <p class="hint">Shows at the top of the Time in list on their timesheet, so one pick fills in their shift. They can change it too.</p>
-          </fieldset>
-
-          <fieldset class="person-set">
-            <legend>Special duties</legend>
-            <div class="duty-checks">${dutyBoxes}</div>
-          </fieldset>
-
-          ${compPerPerson && 'comp_time' in p ? `<fieldset class="person-set">
-            <legend>Comp time</legend>
-            <label class="check"><input type="checkbox" name="comp_time" ${p.comp_time ? 'checked' : ''}> <span><strong>Has comp time</strong> — can log comp time earned, see their balance and use comp time off.</span></label>
-          </fieldset>` : ''}
-
-          ${'timeoff_approver' in p ? `<fieldset class="person-set">
-            <legend>Time off</legend>
-            <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''} ${canSetApprovers() ? '' : 'disabled'}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.${canSetApprovers() ? '' : ' <em>Only the sheriff or chief deputy can change this.</em>'}</span></label>
-          </fieldset>` : ''}
-
-          <fieldset class="person-set" ${on('stats') ? '' : 'hidden'}>
-            <legend>Patrol stats</legend>
-            <label class="check"><input type="checkbox" name="patrol" ${p.patrol ? 'checked' : ''}> <span><strong>Patrol</strong> — logs stats and shows up in them</span></label>
-            <div class="row">
-              <label>Shift<select name="shift"><option value="">No shift</option>${SHIFTS.map((x) => `<option value="${x}" ${p.shift === x ? 'selected' : ''}>${x} Shift</option>`).join('')}</select></label>
-              <label>Supervisor<select name="reports_to"><option value="">No supervisor</option>${supervisors.filter((x) => x.id !== p.id).map((x) =>
-                `<option value="${x.id}" ${p.reports_to === x.id ? 'selected' : ''}>${esc(x.full_name || x.email)}</option>`).join('')}</select></label>
-            </div>
-            <label class="check"><input type="checkbox" name="is_supervisor" ${p.is_supervisor ? 'checked' : ''}> <span><strong>Supervisor</strong> — sees the stats of deputies who report to them</span></label>
-          </fieldset>
-
-          <div class="actions">
-            <button class="btn primary" type="submit">Save</button>
-            <button class="btn" type="button" id="person-cancel">Cancel</button>
-            ${self || lockApprover ? '' : `<button class="btn danger" type="button" id="person-deactivate" style="margin-left:auto">Deactivate</button>`}
-          </div>
-        </form>`);
-
-      const f = $('#person-form');
-      bindUsualPicker($('#person-usual'));
-      $('#person-cancel').onclick = closeModal;
-      f.onsubmit = (e) => {
-        e.preventDefault();
-        const update = {
-          full_name: f.full_name.value.trim(),
-          patrol: f.patrol.checked,
-          shift: f.shift.value || null,
-          is_supervisor: f.is_supervisor.checked,
-          reports_to: f.reports_to.value || null
-        };
-        if (!self && !lockApprover) update.role = f.role.value;
-        if (f.comp_time) update.comp_time = f.comp_time.checked;
-        if (f.timeoff_approver && !f.timeoff_approver.disabled) {
-          update.timeoff_approver = f.timeoff_approver.checked;
-          if (update.timeoff_approver && (update.role || p.role) !== 'manager') { toast('Only managers can approve time off. Change their role to Manager first.', true); return; }
-        }
-        let usual;
-        try { usual = readUsualPicker($('#person-usual')); } catch (err) { toast(err.message, true); return; }
-        if (!usual) { toast('Pick both times for the custom usual hours, or choose None.', true); return; }
-        Object.assign(update, usual);
-        const checks = $$('input[data-duty]', f);
-        const add = checks.filter((c) => c.checked && !has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
-        const remove = checks.filter((c) => !c.checked && has.has(`${p.id}|${c.dataset.duty}`)).map((c) => c.dataset.duty);
-        withBusy(f.querySelector('[type=submit]'), async () => {
-          if (!update.full_name) throw new Error('Name can’t be empty.');
-          const { error } = await sb.from('profiles').update(update).eq('id', p.id);
-          if (error) throw error;
-          if (add.length) {
-            const r = await sb.from('profile_duties').insert(add.map((duty_id) => ({ user_id: p.id, duty_id })));
-            if (r.error) throw r.error;
-          }
-          if (remove.length) {
-            const r = await sb.from('profile_duties').delete().eq('user_id', p.id).in('duty_id', remove);
-            if (r.error) throw r.error;
-          }
-          if (p.is_supervisor && !update.is_supervisor) {
-            // no longer a supervisor: their deputies now report to no one
-            const r = await sb.from('profiles').update({ reports_to: null }).eq('reports_to', p.id);
-            if (r.error) throw r.error;
-          }
-          if (self) Object.assign(state.profile, update);
-          closeModal();
-          toast('Saved.');
-          showView('team');
-        });
-      };
-      $('#person-deactivate')?.addEventListener('click', (e) => setActive(e.target, p, false));
-    };
-
-    const setActive = (b, p, activeFlag) => {
-      const name = p.full_name || p.email;
-      const msg = activeFlag
-        ? `Reactivate ${name}? They’ll be able to sign in and submit timesheets again.`
-        : `Deactivate ${name}?\n\nThey’ll be locked out right away. Their timesheets and time off are kept. Any timesheet or time off they already submitted stays in Approvals so you can still approve their final pay.`;
-      if (!confirm(msg)) return;
-      withBusy(b, async () => {
-        const { error } = await sb.from('profiles').update({ active: activeFlag }).eq('id', p.id);
-        if (error) throw error;
-        closeModal();
-        toast(activeFlag ? 'Reactivated.' : 'Deactivated.');
         showView('team');
       });
     };
