@@ -1,6 +1,6 @@
 // Supabase Edge Function: timesheet-reminder
 // Runs every morning (scheduled by timesheet-reminder.sql). On the last day of a pay period it
-// emails everyone active who hasn't submitted a timesheet for that period. Each person gets at
+// emails everyone active (except people ticked "Doesn't do timesheets here") who hasn't submitted a timesheet for that period. Each person gets at
 // most one reminder per pay period. On other days it does nothing.
 //
 // Deploy: Supabase → Edge Functions → Deploy a new function → Via Editor → name it
@@ -68,13 +68,14 @@ Deno.serve(async (req) => {
 
     // Everyone active without a submitted or approved timesheet for this period
     const [people, sheets] = await Promise.all([
-      admin.from('profiles').select('id, full_name, email').eq('active', true),
+      admin.from('profiles').select('*').eq('active', true),
       admin.from('timesheets').select('user_id, status').eq('period_start', start)
     ]);
     if (people.error) throw people.error;
     if (sheets.error) throw sheets.error;
     const status = new Map(sheets.data.map((t) => [t.user_id, t.status]));
-    const missing = people.data.filter((p) => p.email && !['submitted', 'approved'].includes(status.get(p.id) ?? ''));
+    // People ticked "Doesn't do timesheets here" on the People tab never get reminders
+    const missing = people.data.filter((p) => p.email && !p.no_timesheet && !['submitted', 'approved'].includes(status.get(p.id) ?? ''));
 
     if (dryRun) {
       return json({ dry_run: true, period: `${label(start)} – ${label(end)}`, last_day: today === end,
