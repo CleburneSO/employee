@@ -100,7 +100,7 @@
   const fmtShort = (s) => { const d = parseDate(s); return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; };
   const fmtDay = (s) => parseDate(s).toLocaleDateString(undefined, { weekday: 'short' });
   const fmtDateTime = (ts) => ts ? new Date(ts).toLocaleString() : '';
-  const badge = (s) => `<span class="badge badge-${esc(s)}">${esc(s)}</span>`;
+  const badge = (s) => `<span class="badge badge-${esc(s)}">${esc(s === 'needs_signature' ? 'needs signature' : s)}</span>`;
   const typeLabel = (t) => (TIME_OFF_TYPES.find(([k]) => k === t) || [t, t])[1];
   const dayCount = (a, b) => Math.round((parseDate(b) - parseDate(a)) / 86400000) + 1;
   const dateRange = (a, b) => a === b ? fmtDate(a) : `${fmtDate(a)} – ${fmtDate(b)}`;
@@ -483,7 +483,7 @@
     if (isManager()) admin.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'People']);
     if (isOwner()) admin.push(['audit', 'Audit Log']);
     state.adminViews = admin.map(([k]) => k);
-    if (![...tabs, ...admin].some(([k]) => k === state.view) && !(state.view === 'person' && isManager())) state.view = 'calendar';
+    if (![...tabs, ...admin].some(([k]) => k === state.view) && !(['person', 'tsfor'].includes(state.view) && isManager())) state.view = 'calendar';
     const tabBtn = ([k, l]) => `<button type="button" data-view="${k}" data-label="${esc(l)}">${esc(l)}${k === 'review' ? ' <span class="count tab-count" hidden></span>' : ''}</button>`;
 
     app.innerHTML = `
@@ -565,15 +565,19 @@
     const want = [];
     if (prev !== cur && periodEnd(prev) >= joined) want.push(prev);
     if (periodEnd(cur) === isoDate(new Date())) want.push(cur);
-    if (!want.length) { box.innerHTML = ''; return; }
-    const { data, error } = await sb.from('timesheets').select('period_start, status').eq('user_id', me()).in('period_start', want);
+    const [{ data, error }, sign] = await Promise.all([
+      want.length ? sb.from('timesheets').select('period_start, status').eq('user_id', me()).in('period_start', want) : { data: [] },
+      sb.from('timesheets').select('period_start').eq('user_id', me()).eq('status', 'needs_signature')
+    ]);
     if (error || !['calendar', 'timesheets'].includes(state.view)) return;   // moved to another page meanwhile
     const status = Object.fromEntries(data.map((t) => [t.period_start, t.status]));
+    (sign.data || []).forEach((t) => { status[t.period_start] = 'needs_signature'; if (!want.includes(t.period_start)) want.push(t.period_start); });
     box.innerHTML = want.filter((p) => !['submitted', 'approved'].includes(status[p])).map((p) => `<div class="notice warn due"><span>
-      ${status[p] === 'rejected' ? `Your timesheet for <strong>${esc(periodLabel(p))}</strong> was sent back and needs to be resubmitted.`
+      ${status[p] === 'needs_signature' ? `A manager filled in your timesheet for <strong>${esc(periodLabel(p))}</strong>. Check it and sign it.`
+        : status[p] === 'rejected' ? `Your timesheet for <strong>${esc(periodLabel(p))}</strong> was sent back and needs to be resubmitted.`
         : p === cur ? `Today is the last day of the pay period. Your timesheet for <strong>${esc(periodLabel(p))}</strong> is due.`
         : `Your timesheet for <strong>${esc(periodLabel(p))}</strong> hasn’t been submitted.`}</span>
-      <button class="btn small primary" type="button" data-due="${p}">Fill it out</button></div>`).join('');
+      <button class="btn small primary" type="button" data-due="${p}">${status[p] === 'needs_signature' ? 'Check &amp; sign' : 'Fill it out'}</button></div>`).join('');
     $$('[data-due]', box).forEach((b) => { b.onclick = () => { state.tsPeriod = b.dataset.due; showView('timesheets'); }; });
   }
 
@@ -581,7 +585,7 @@
     state.flushDraft?.();
     state.view = v;
     refreshDue();
-    const tab = v === 'person' ? 'team' : v;   // a profile belongs to People
+    const tab = v === 'person' || v === 'tsfor' ? 'team' : v;   // a profile (and filling out someone's timesheet) belongs to People
     $$('.tabs button[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === tab));
     $('.tab-group-toggle')?.classList.toggle('active', (state.adminViews || []).includes(tab));
     const cur = $('.menu-current');
@@ -614,10 +618,13 @@
   // Usual hours: the person's normal shift, offered at the top of the Time in / Time out lists
   const USUAL_PRESETS = [['07:00', '19:00'], ['19:00', '07:00'], ['13:00', '01:00'], ['08:00', '16:00'], ['08:00', '18:00'], ['07:00', '17:00']];
   const shiftText = (i, o) => `${clock(i)}–${clock(o)}`;
-  const hasUsual = () => !!(state.profile?.usual_in && state.profile?.usual_out);
+  // The person whose timesheet is open (a manager can fill one out for someone else)
+  let tsPerson = null;
+  const usualOf = () => tsPerson || state.profile;
+  const hasUsual = () => !!(usualOf()?.usual_in && usualOf()?.usual_out);
   function usualOption(cls) {
     if (!hasUsual()) return '';
-    const p = state.profile;
+    const p = usualOf();
     return cls === 't-in'
       ? `<option value="usual">★ ${esc(shiftText(p.usual_in, p.usual_out))} (usual)</option>`
       : `<option value="usual">★ ${esc(clock(p.usual_out))} (usual)</option>`;
@@ -734,12 +741,23 @@
   }
 
   const TS_RECENT = 4;   // how many past timesheets to list before "Show all"
-  views.timesheets = async (el) => {
+  // A manager filling out or fixing someone else's timesheet (from their profile)
+  views.tsfor = async (el) => {
+    await loadPeople();
+    return views.timesheets(el, state.tsFor);
+  };
+  views.timesheets = async (el, forId) => {
+    // forId: a manager doing someone else's timesheet. It's saved for them to check and sign.
+    const other = !!forId && forId !== me() && isManager() ? state.people[forId] : null;
+    if (forId && !other) throw new Error('That person wasn’t found.');
+    const uid = other ? other.id : me();
+    tsPerson = other;
+    const first = other ? (other.full_name || 'them').split(' ')[0] : '';
     const [{ data: mine, error }, , assigned, dr] = await Promise.all([
-      sb.from('timesheets').select('*').eq('user_id', me()).order('period_start', { ascending: false }),
+      sb.from('timesheets').select('*').eq('user_id', uid).order('period_start', { ascending: false }),
       loadDuties(),
-      loadAssignments(me()),
-      sb.from('timesheet_drafts').select('period_start, data, updated_at')
+      loadAssignments(uid),
+      other ? { data: [] } : sb.from('timesheet_drafts').select('period_start, data, updated_at')
     ]);
     if (error) throw error;
     const myIds = new Set(assigned.map((a) => a.duty_id));
@@ -754,13 +772,15 @@
     segDuties = myDuties;
 
     el.innerHTML = `
+      ${other ? `<button class="btn-link" type="button" id="ts-back">← ${esc(other.full_name || 'Back')}</button>` : ''}
       <section class="card">
-        <h2>Submit a timesheet</h2>
+        <h2>${other ? `Timesheet for ${esc(other.full_name)}` : 'Submit a timesheet'}</h2>
+        ${other ? `<p class="notice">You’re filling this out for ${esc(other.full_name)}. When you save it, it goes to them to check and sign, then it comes back for approval like any other timesheet.</p>` : ''}
         <form id="ts-form" autocomplete="off">
           <div class="row">
             <label>Pay period${periodSelect('ts-period', state.tsPeriod || currentPeriod(), mine.map((t) => t.period_start))}</label>
           </div>
-          <div class="usual-bar" id="ts-usual"><span class="usual-label">My usual hours</span>${usualPicker(state.profile.usual_in, state.profile.usual_out)}
+          <div class="usual-bar" id="ts-usual" ${other ? 'hidden' : ''}><span class="usual-label">My usual hours</span>${usualPicker(state.profile.usual_in, state.profile.usual_out)}
             <span class="hint" id="ts-usual-hint">${hasUsual() ? 'Pick <strong>★</strong> in a Time in list to fill in your usual shift.' : 'Your usual shift will show at the top of each Time in list.'}</span></div>
           <div id="ts-status" class="notice hidden"></div>
           <div id="ts-draft-note" class="notice hidden"></div>
@@ -787,6 +807,8 @@
           </table></div>
           <div id="ts-warn" class="notice warn hidden"></div>
 
+          ${other ? `<label>What did you fill in or change? (${esc(first)} will see this)<textarea id="ts-prep-note" rows="2" maxlength="500" placeholder="e.g. Turned in a paper timesheet / Out time on 10/4 was 17:00"></textarea></label>
+          <div class="row submit-row"><button class="btn primary" type="submit" id="ts-submit">Save for ${esc(first)} to sign</button></div>` : `
           <fieldset class="sign">
             <legend>Employee signature</legend>
             <p class="sign-statement">${esc(SIGN_STATEMENT)}</p>
@@ -800,13 +822,14 @@
               <span>I agree the time reported is accurate and true, and that my electronic signature is the legal equivalent of my handwritten signature.</span></label>
           </fieldset>
           <div class="row submit-row"><button class="btn primary" type="submit" id="ts-submit">Sign &amp; submit</button>
-            <span class="hint" id="ts-draft" aria-live="polite"></span></div>
+            <span class="hint" id="ts-draft" aria-live="polite"></span></div>`}
         </form>
       </section>
-      <section class="card"><h2>My timesheets <span class="count muted-count">${mine.length}</span></h2>
+      ${other ? '' : `<section class="card"><h2>My timesheets <span class="count muted-count">${mine.length}</span></h2>
         <div id="ts-list">${timesheetTable(mine.slice(0, TS_RECENT), false)}</div>
         ${mine.length > TS_RECENT ? `<button class="btn small" type="button" id="ts-all">Show all ${mine.length}</button>` : ''}
-      </section>`;
+      </section>`}`;
+    $('#ts-back')?.addEventListener('click', () => openProfile(other.id));
 
     bindTimesheetButtons(el, mine);
     state.tsPeriod = null;   // a banner's "Fill it out" picks the period once
@@ -816,18 +839,18 @@
       bindTimesheetButtons($('#ts-list'), mine);
       e.target.remove();
     });
-    const pad = createSignaturePad($('#sig'));
-    $('#sig-clear').onclick = () => pad.clear();
+    const pad = other ? null : createSignaturePad($('#sig'));
+    if (pad) $('#sig-clear').onclick = () => pad.clear();
     // ★ usual: fill in the person's usual shift (both times from Time in; just the end from Time out)
     const applyUsual = (e) => {
       const sel = e.target;
       if (sel.value !== 'usual' || !hasUsual()) return;
       const tr = sel.closest('tr');
       if (sel.classList.contains('t-in')) {
-        $('.t-in', tr).value = state.profile.usual_in;
-        $('.t-out', tr).value = state.profile.usual_out;
+        $('.t-in', tr).value = usualOf().usual_in;
+        $('.t-out', tr).value = usualOf().usual_out;
       } else {
-        sel.value = state.profile.usual_out;
+        sel.value = usualOf().usual_out;
       }
     };
     $('#ts-rows').addEventListener('input', applyUsual);
@@ -889,6 +912,7 @@
     });
     const draftState = (t) => { const x = $('#ts-draft'); if (x) x.textContent = t; };
     function queueDraft() {
+      if (other) return;   // no drafts for someone else's timesheet
       draftPeriod = periodInput.value;
       clearTimeout(draftTimer);
       draftTimer = setTimeout(flushDraft, 1200);
@@ -900,6 +924,7 @@
       if (!p || !$('#ts-form')) return;
       draftPeriod = null;
       const data = readDraft();
+      if (other) return;
       draftSaving = (async () => {
         const { data: row, error: err } = await sb.from('timesheet_drafts')
           .upsert({ user_id: me(), period_start: p, data }).select('period_start, data, updated_at').single();
@@ -909,6 +934,7 @@
       })();
     }
     async function discardDraft(p) {
+      if (other) return;
       clearTimeout(draftTimer);
       if (draftPeriod === p) draftPeriod = null;
       await draftSaving;
@@ -923,11 +949,21 @@
       const note = $('#ts-status'), btn = $('#ts-submit');
       btn.disabled = false;
       note.className = 'notice hidden';
-      if (existing) {
+      if (existing && other) {
+        note.className = 'notice';
+        note.textContent = {
+          approved: `This timesheet is approved. If you change it, ${first} has to sign it again and it needs approval again.`,
+          needs_signature: `Waiting for ${first} to sign (you or another manager filled it in${existing.prepared_at ? ' on ' + fmtDateTime(existing.prepared_at) : ''}). You can still change it.`,
+          rejected: `This timesheet was sent back. Fixing it sends it to ${first} to sign again.`
+        }[existing.status] || `${first} already submitted this one. If you change it, they have to sign it again.`;
+      } else if (existing) {
         note.className = 'notice';
         if (existing.status === 'approved') {
           note.textContent = 'This pay period is already approved and locked.';
           btn.disabled = true;
+        } else if (existing.status === 'needs_signature') {
+          note.className = 'notice warn';
+          note.innerHTML = `<strong>${esc(personName(existing.prepared_by, 'A manager'))}</strong> filled in this timesheet for you${existing.prepared_note ? `: <em>“${esc(existing.prepared_note)}”</em>` : '.'} Check it, change anything that’s wrong, then sign and submit.`;
         } else if (existing.status === 'rejected') {
           note.innerHTML = `This timesheet was sent back${existing.manager_note ? `: <em>${esc(existing.manager_note)}</em>` : '.'} Fix it and sign again to resubmit.`;
         } else {
@@ -960,7 +996,7 @@
       const draft = drafts[p], draftNote = $('#ts-draft-note');
       draftNote.className = 'notice hidden';
       draftState('');
-      if (draft && (existing?.status === 'approved' || (existing && new Date(draft.updated_at) <= new Date(existing.signed_at)))) {
+      if (draft && (existing?.status === 'approved' || (existing && new Date(draft.updated_at) <= new Date(existing.prepared_at && existing.status === 'needs_signature' ? existing.prepared_at : existing.signed_at)))) {
         discardDraft(p);   // already signed or locked since it was saved
       } else if (draft) {
         const d = draft.data || {};
@@ -1015,6 +1051,18 @@
         const anyHours = entries.some((x) => x.hours > 0) || Object.values(extras).some((v) => v > 0)
           || duty_hours.some((d) => d.hours > 0);
         if (!anyHours) throw new Error('Enter at least one day worked or some vacation, holiday or sick hours.');
+        if (other) {
+          const prepared_note = $('#ts-prep-note').value.trim();
+          if (!prepared_note) throw new Error(`Say what you filled in or changed, so ${first} knows what to check.`);
+          const row = { period_start: periodInput.value, entries, ...extras, duty_hours, traffic_ot_hours: 0, k9_hours: 0, prepared_note };
+          const res = existing
+            ? await sb.from('timesheets').update(row).eq('id', existing.id)
+            : await sb.from('timesheets').insert({ ...row, user_id: other.id });
+          if (res.error) throw res.error;
+          toast(`Saved. ${first} will see it on their timesheets to check and sign.`);
+          openProfile(other.id);
+          return;
+        }
         if (pad.isEmpty()) throw new Error('Please sign in the signature box.');
         const name = $('#ts-name').value.trim();
         if (!name) throw new Error('Please type your full name.');
@@ -1093,7 +1141,7 @@
     const extraLines = duties.length + (special.length ? 1 : 0) + (hasDutyBlocks ? 1 : 0);
     const compact = extraLines > 5 ? ' compact tight' : extraLines > 3 ? ' compact' : '';
 
-    return `<div class="sheet${compact}">
+    return `<div class="sheet fill${compact}">
       <div class="sheet-head">
         <div class="org">${esc(ORG)}</div>
         <div class="title">${esc(REPORT_TITLE)}</div>
@@ -1118,7 +1166,8 @@
           <span class="red">Employee Signature:</span>
           <span class="sig-space">${sigOk ? `<img src="${t.signature_data}" alt="Signature of ${esc(t.signed_name)}">` : ''}</span>
         </div>
-        <div class="sig-meta">Electronically signed by ${esc(t.signed_name)} on ${esc(fmtDateTime(t.signed_at))}</div>
+        <div class="sig-meta">${t.status === 'needs_signature' ? 'NOT SIGNED YET — waiting for the employee to check and sign.' : `Electronically signed by ${esc(t.signed_name)} on ${esc(fmtDateTime(t.signed_at))}`}${t.prepared_by
+          ? `<br>Filled in / corrected by ${esc(personName(t.prepared_by, 'a manager'))} on ${esc(fmtDateTime(t.prepared_at))}${t.prepared_note ? ` — “${esc(t.prepared_note)}”` : ''}` : ''}</div>
       </div>
     </div>
     ${t.status === 'approved' && t.reviewed_at
@@ -1166,8 +1215,10 @@
       </div>
       <div class="print-area"><div class="sheet-page">${sheetHTML(t)}</div></div>
       ${canReview ? reviewControls('Send back') : ''}
-      <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button></div>`);
+      <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button>
+        ${isManager() && t.user_id !== me() && state.people[t.user_id]?.active !== false ? '<button class="btn" id="ts-fix">Fix this timesheet</button>' : ''}</div>`);
     $('#print-btn').onclick = () => window.print();
+    $('#ts-fix')?.addEventListener('click', () => { closeModal(); fillOutFor(t.user_id, t.period_start); });
     if (canReview) bindReview('timesheets', t.id, 'rejected');
   }
 
@@ -1737,14 +1788,14 @@
       const status = Object.fromEntries(dueTs.data.filter((t) => t.period_start === p).map((t) => [t.user_id, t.status]));
       const joinedBy = (x) => !x.created_at || isoDate(new Date(x.created_at)) <= periodEnd(p);   // not people who started after it
       const list = people.filter((x) => x.active !== false && joinedBy(x) && !['submitted', 'approved'].includes(status[x.id]))
-        .map((x) => ({ ...x, sentBack: status[x.id] === 'rejected' }));
+        .map((x) => ({ ...x, sentBack: status[x.id] === 'rejected', toSign: status[x.id] === 'needs_signature' }));
       return { p, list };
     }).filter((g) => g.list.length);
     const missingCount = missing.reduce((n, g) => n + g.list.length, 0);
     el.innerHTML = `
       ${missingCount ? `<section class="card"><h2>Haven’t submitted a timesheet <span class="count">${missingCount}</span></h2>
         ${missing.map(({ p, list }) => `<h3 class="due-period">${esc(periodLabel(p))} <span class="muted">${periodEnd(p) === today ? 'due today' : `was due ${esc(fmtShort(periodEnd(p)))}`}</span></h3>
-          <div class="due-people">${list.map((x) => `<span class="chip ${x.sentBack ? '' : 'muted-chip'}" title="${x.sentBack ? 'Sent back, not resubmitted yet' : 'Not submitted'}">${esc(x.full_name || x.email)}${x.sentBack ? ' (sent back)' : ''}</span>`).join(' ')}</div>`).join('')}
+          <div class="due-people">${list.map((x) => `<span class="chip ${x.sentBack ? '' : 'muted-chip'}" title="${x.sentBack ? 'Sent back, not resubmitted yet' : 'Not submitted'}">${esc(x.full_name || x.email)}${x.sentBack ? ' (sent back)' : x.toSign ? ' (needs their signature)' : ''}</span>`).join(' ')}</div>`).join('')}
         
       </section>` : ''}
       <section class="card"><h2>Timesheets awaiting approval <span class="count">${ts.data.length}</span></h2>
@@ -3180,6 +3231,13 @@
   };
 
   /* ---------------- manager: one person's profile (everything about them in one place) ---------------- */
+  // Manager: open the timesheet form for someone else (they sign it afterwards)
+  function fillOutFor(id, period) {
+    state.tsFor = id;
+    state.tsPeriod = period || null;
+    showView('tsfor');
+    window.scrollTo(0, 0);
+  }
   function openProfile(id) {
     state.profileId = id;
     showView('person');
@@ -3257,7 +3315,8 @@
           `<button class="btn small" id="pf-uo-adj" type="button">Adjust</button>${canApproveTimeOff() && p.active !== false && id !== me() ? '<button class="btn small" id="pf-uo-new" type="button">Enter an order</button>' : ''}`) : ''}
       </section>
 
-      <section class="card"><h2>Timesheets <span class="count muted-count">${ts.data.length}</span></h2><div id="pf-ts">${timesheetTable(ts.data, 'person')}</div></section>
+      <section class="card"><div class="pf-sec-head"><h2>Timesheets <span class="count muted-count">${ts.data.length}</span></h2>
+        ${p.active !== false && id !== me() ? '<button class="btn small" id="pf-ts-new" type="button">Fill out / fix a timesheet</button>' : ''}</div><div id="pf-ts">${timesheetTable(ts.data, 'person')}</div></section>
       <section class="card"><h2>${comp ? 'Time off &amp; comp time' : 'Time off'} <span class="count muted-count">${to.data.length}</span></h2>
         <div id="pf-to">${timeOffTable(to.data, 'person')}</div>
         ${cAdj.data.length ? `<details class="fold"><summary><h3>Comp time adjustments</h3></summary>
@@ -3278,6 +3337,7 @@
     $('#pf-edit').onclick = (e) => withBusy(e.target, () => editPerson(p));
     $('#pf-reactivate')?.addEventListener('click', (e) => setActive(e.target, p, true));
     bindTimesheetButtons($('#pf-ts'), ts.data);
+    $('#pf-ts-new')?.addEventListener('click', () => fillOutFor(id));
     bindTimeOffButtons($('#pf-to'), to.data);
     if (uni) bindUniformButtons($('#pf-uo'), uOrd.data);
     $('#pf-comp-adj')?.addEventListener('click', () => adjustComp(p, Number(cb?.balance) || 0));

@@ -119,6 +119,7 @@ tfoot td { font-weight: 700; border-bottom: 0; }
 .badge-submitted, .badge-pending { background: #fdf1dc; color: var(--warn); }
 .badge-approved { background: #dcf3e6; color: var(--ok); }
 .badge-rejected, .badge-denied { background: #fbe3e3; color: var(--danger); }
+.badge-needs_signature { background: #e3eefb; color: #1d5fa8; }
 .count { background: var(--primary); color: #fff; border-radius: 99px; padding: 0 8px; font-size: .8rem; vertical-align: middle; }
 
 .notice { background: #f1f5ec; border: 1px solid #d3dfc4; border-radius: 7px; padding: .6rem .8rem; margin-bottom: 1rem; }
@@ -863,6 +864,11 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
   .case-sheet td { height: 28px; font-size: 13.5px; }
   .case-sheet td.sm { font-size: 11px; }
   .case-sheet th { font-size: 13px; padding-bottom: 3px; }
+  /* a timesheet fills the whole letter page: the rows stretch to take up the extra space
+     (9.8in tall: a little under the 10.1in between the margins, so it never spills onto a second page) */
+  .sheet-page:has(> .sheet.fill) { height: 9.8in; display: flex; flex-direction: column; }
+  .sheet.fill { flex: 1 1 auto; display: flex; flex-direction: column; }
+  .sheet.fill .sheet-table { flex: 1 1 auto; }
 }
 
 /* ===== DARK MODE (generated) ===== */
@@ -879,6 +885,7 @@ fieldset.person-set .usual-picker { margin-bottom: .3rem; }
   :root[data-theme="dark"] .btn.danger { background: #222222; }
   :root[data-theme="dark"] .badge { background: #26292e; }
   :root[data-theme="dark"] .badge-submitted, :root[data-theme="dark"] .badge-pending { background: #3f311b; }
+  :root[data-theme="dark"] .badge-needs_signature { background: #1a2b40; color: #b4cff0; }
   :root[data-theme="dark"] .badge-approved { background: #253a2e; }
   :root[data-theme="dark"] .badge-rejected, :root[data-theme="dark"] .badge-denied { background: #3a1d1d; }
   :root[data-theme="dark"] .notice { background: #2b3024; border: 1px solid #4e5644; }
@@ -992,3 +999,6 @@ table.entry td.note-cell { display: none; }
 .pf-tile .hint { margin: 0; }
 .pf-tile-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: auto; padding-top: .45rem; }
 @media (max-width: 760px) { .pf-tiles { grid-template-columns: 1fr 1fr; gap: .5rem; } .pf-tile { padding: .7rem .75rem; } .pf-tile-big { font-size: 1.2rem; } }
+.pf-sec-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem; }
+.pf-sec-head h2 { margin: 0; }
+.pf-sec-head + div { margin-top: .75rem; }

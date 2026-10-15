@@ -297,9 +297,9 @@ create table if not exists public.timesheets (
   entries jsonb default '[]'::jsonb not null,
   total_hours numeric(6,2) default 0 not null,
   notes text,
-  signature_data text not null,
-  signed_name text not null,
-  signed_at timestamp with time zone default now() not null,
+  signature_data text,
+  signed_name text,
+  signed_at timestamp with time zone default now(),
   status text default 'submitted'::text not null,
   manager_note text,
   reviewed_by uuid,
@@ -317,7 +317,7 @@ create table if not exists public.timesheets (
   constraint timesheets_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES profiles(id),
   constraint timesheets_signature_data_check CHECK ((signature_data ~~ 'data:image/png;base64,%'::text)),
   constraint timesheets_signed_name_check CHECK ((length(TRIM(BOTH FROM signed_name)) > 0)),
-  constraint timesheets_status_check CHECK ((status = ANY (ARRAY['submitted'::text, 'approved'::text, 'rejected'::text]))),
+  constraint timesheets_status_check CHECK ((status = ANY (ARRAY['submitted'::text, 'approved'::text, 'rejected'::text, 'needs_signature'::text]))),
   constraint timesheets_user_id_fkey FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE RESTRICT,
   constraint timesheets_user_id_week_start_key UNIQUE (user_id, period_start)
 );
@@ -432,6 +432,20 @@ alter table public.profiles add column if not exists comp_time boolean default f
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
 -- Comp time earned: the hours actually worked. hours = the comp hours credited (time and a half).
 alter table public.time_off_requests add column if not exists hours_worked numeric(6,2);
+-- Timesheets a manager filled out or fixed for someone: they wait for the employee to sign
+alter table public.timesheets add column if not exists prepared_by uuid references public.profiles(id);
+alter table public.timesheets add column if not exists prepared_at timestamp with time zone;
+alter table public.timesheets add column if not exists prepared_note text;
+alter table public.timesheets alter column signature_data drop not null;
+alter table public.timesheets alter column signed_name drop not null;
+alter table public.timesheets alter column signed_at drop not null;
+alter table public.timesheets drop constraint if exists timesheets_status_check;
+alter table public.timesheets add constraint timesheets_status_check
+  check (status in ('submitted', 'approved', 'rejected', 'needs_signature'));
+-- Anything but "needs signature" carries the employee's signature
+alter table public.timesheets drop constraint if exists timesheets_signed_check;
+alter table public.timesheets add constraint timesheets_signed_check
+  check (status = 'needs_signature' or (signature_data is not null and signed_name is not null and signed_at is not null));
 -- Uniform order the sheriff or chief deputy entered for someone (e.g. a paper or phone order): who entered it
 alter table public.uniform_orders add column if not exists entered_by uuid references public.profiles(id);
 -- One-time fix for comp time logged before time and a half: what they entered was the hours worked.
@@ -790,13 +804,26 @@ begin
   -- auth.uid() is null when you run SQL from the dashboard: skip the permission rules
   if auth.uid() is not null then
     if tg_op = 'INSERT' then
-      new.user_id      := auth.uid();
-      new.status       := 'submitted';
-      new.signed_at    := now();            -- server time, not the browser's clock
       new.manager_note := null;
       new.reviewed_by  := null;
       new.reviewed_at  := null;
       new.created_at   := now();
+      if new.user_id is not null and new.user_id <> auth.uid() then
+        -- A manager filling out someone's timesheet: it waits for them to sign
+        if not public.is_manager() then raise exception 'Not allowed.'; end if;
+        if not exists (select 1 from public.profiles where id = new.user_id and active) then
+          raise exception 'Pick an active employee.';
+        end if;
+        new.status := 'needs_signature';
+        new.signature_data := null; new.signed_name := null; new.signed_at := null;
+        new.prepared_by := auth.uid(); new.prepared_at := now();
+        new.prepared_note := nullif(trim(coalesce(new.prepared_note, '')), '');
+      else
+        new.user_id      := auth.uid();
+        new.status       := 'submitted';
+        new.signed_at    := now();            -- server time, not the browser's clock
+        new.prepared_by := null; new.prepared_at := null; new.prepared_note := null;
+      end if;
     else
       new.id := old.id;
       new.user_id := old.user_id;
@@ -806,6 +833,9 @@ begin
       if public.is_manager()
          and new.status in ('approved', 'rejected')
          and new.status is distinct from old.status then
+        if old.status = 'needs_signature' then
+          raise exception 'This timesheet is waiting for the employee to sign it.';
+        end if;
         -- Manager approving / sending back: the employee's signed record stays untouched
         new.entries          := old.entries;
         new.vacation_hours   := old.vacation_hours;
@@ -820,6 +850,7 @@ begin
         new.signed_at        := old.signed_at;
         new.reviewed_by      := auth.uid();
         new.reviewed_at      := now();
+        new.prepared_by := old.prepared_by; new.prepared_at := old.prepared_at; new.prepared_note := old.prepared_note;
       elsif old.user_id = auth.uid() then
         -- Employee re-signing their own timesheet (only if not approved yet)
         if old.status = 'approved' then
@@ -830,14 +861,24 @@ begin
         new.manager_note := null;
         new.reviewed_by  := null;
         new.reviewed_at  := null;
+        -- who prepared it stays on record
+        new.prepared_by := old.prepared_by; new.prepared_at := old.prepared_at; new.prepared_note := old.prepared_note;
+      elsif public.is_manager() and old.user_id <> auth.uid() then
+        -- A manager filling out or fixing someone's timesheet (even an approved one):
+        -- their signature comes off and it goes back to them to check and sign
+        new.status := 'needs_signature';
+        new.signature_data := null; new.signed_name := null; new.signed_at := null;
+        new.manager_note := null; new.reviewed_by := null; new.reviewed_at := null;
+        new.prepared_by := auth.uid(); new.prepared_at := now();
+        new.prepared_note := nullif(trim(coalesce(new.prepared_note, '')), '');
       else
         raise exception 'Not allowed.';
       end if;
     end if;
 
-    -- When the employee signs: keep only special duties assigned to them,
-    -- and save each line's current label/note with the timesheet.
-    if new.status = 'submitted' then
+    -- When the employee signs (or a manager prepares it): keep only special duties assigned
+    -- to them, and save each line's current label/note with the timesheet.
+    if new.status in ('submitted', 'needs_signature') then
       -- Time is kept in 15-minute increments
       if exists (select 1 from jsonb_array_elements(coalesce(new.entries, '[]'::jsonb)) e
                  where coalesce(e->>'in', '') !~ '^([01][0-9]|2[0-3]):(00|15|30|45)$' and coalesce(e->>'in', '') <> ''
@@ -1832,7 +1873,7 @@ drop policy if exists time_off_update on public.time_off_requests;
 create policy time_off_update on public.time_off_requests as PERMISSIVE for UPDATE to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
 
 drop policy if exists timesheets_insert on public.timesheets;
-create policy timesheets_insert on public.timesheets as PERMISSIVE for INSERT to authenticated with check (((user_id = auth.uid()) AND is_active()));
+create policy timesheets_insert on public.timesheets as PERMISSIVE for INSERT to authenticated with check ((is_active() AND ((user_id = auth.uid()) OR is_manager())));
 
 drop policy if exists timesheets_select on public.timesheets;
 create policy timesheets_select on public.timesheets as PERMISSIVE for SELECT to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
