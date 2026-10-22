@@ -1455,6 +1455,9 @@
   }
 
   function openTimeOff(r) {
+    // The sheriff / chief deputy can reverse a decision made by mistake (approved ⇄ denied)
+    const canChange = isManager() && canApproveTimeOff() && ['approved', 'denied'].includes(r.status);
+    const flipTo = r.status === 'approved' ? 'denied' : 'approved';
     openModal(`
       <div class="print-area print-only"><div class="sheet-page">${timeOffSheetHTML(r)}</div></div>
       <div class="doc no-print">
@@ -1472,9 +1475,28 @@
       </div>
       ${r.status !== 'pending' || !isManager() ? '' : canApproveTimeOff() ? reviewControls('Deny')
         : `<p class="notice no-print">Waiting on ${esc(approverNames())} to approve or deny.</p>`}
+      ${canChange ? `<details class="fold review no-print" id="to-change"><summary><h3>Change decision</h3></summary>
+        <p class="hint">Made a mistake? This changes it to <strong>${flipTo === 'denied' ? 'denied' : 'approved'}</strong> and emails ${esc(personName(r.user_id, 'the employee'))}. The Audit Log keeps both decisions.</p>
+        <label>Note to employee${flipTo === 'denied' ? ' (why it’s being denied)' : ' (optional)'}<textarea id="rv-change-note" rows="2"></textarea></label>
+        <div class="actions"><button class="btn ${flipTo === 'denied' ? 'danger' : 'primary'}" id="rv-change">${flipTo === 'denied' ? 'Deny instead' : 'Approve instead'}</button></div></details>` : ''}
       <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button></div>`);
     $('#print-btn').onclick = () => window.print();
     if (r.status === 'pending' && canApproveTimeOff()) bindReview('time_off_requests', r.id, 'denied');
+    if (canChange) {
+      $('#rv-change').onclick = (e) => {
+        const note = $('#rv-change-note').value.trim();
+        if (flipTo === 'denied' && !note) { toast('Add a note saying why, so they know why it changed.', true); return; }
+        if (!confirm(`Change this from ${r.status} to ${flipTo}? ${personName(r.user_id, 'The employee')} will get an email.`)) return;
+        withBusy(e.target, async () => {
+          const { error } = await sb.from('time_off_requests').update({ status: flipTo, manager_note: note || null }).eq('id', r.id);
+          if (error) throw error;
+          notify('timeoff_decision', r.id);
+          closeModal();
+          toast(flipTo === 'denied' ? 'Changed to denied.' : 'Changed to approved.');
+          showView(state.view);
+        });
+      };
+    }
     if (isComp(r.type) && r.hours != null) {
       compBalances().then((list) => {
         const b = list.find((x) => x.user_id === r.user_id);
