@@ -3172,6 +3172,84 @@
       `<tr><td>${esc(FIELD_LABELS[k] || k)}</td><td>${auditValue(c[k])}</td></tr>`).join('')}</tbody></table>`;
   }
 
+  /* ---------------- site owner: every record as one restore file ---------------- */
+  // Read through the portal (no Supabase dashboard needed), written as SQL that puts it all back
+  // into a NEW Supabase project after schema.sql has been run there. Logins come back by email;
+  // passwords can't be copied, so everyone uses "Forgot password" once.
+  const BACKUP_TABLES = [
+    ['profiles', 'id'], ['duties', 'id'], ['profile_duties', 'user_id,duty_id'], ['events', 'id'], ['event_people', 'event_id,user_id'],
+    ['announcements', 'id'], ['case_counters', 'year'], ['case_numbers', 'id'], ['comp_adjustments', 'id'], ['offduty_jobs', 'id'],
+    ['offduty_requests', 'id'], ['patrol_stats', 'id'], ['time_off_requests', 'id'], ['timesheets', 'id'],
+    ['uniform_orders', 'id'], ['uniform_adjustments', 'id'], ['audit_log', 'id']
+  ];
+  const sqlVal = (v) => v === null || v === undefined ? 'null'
+    : typeof v === 'boolean' ? String(v)
+    : typeof v === 'number' ? String(v)
+    : `'${(typeof v === 'object' ? JSON.stringify(v) : String(v)).replace(/'/g, "''")}'`;
+  async function fetchAll(table, order) {
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      let q = sb.from(table).select('*');
+      order.split(',').forEach((c) => { q = q.order(c); });
+      const { data, error } = await q.range(from, from + 999);
+      if (error) {
+        if (/does not exist|schema cache/i.test(error.message)) return null;   // table not set up in this portal
+        throw new Error(`Couldn’t read ${table}: ${error.message}`);
+      }
+      rows.push(...data);
+      if (data.length < 1000) return rows;
+    }
+  }
+  async function downloadRecordsBackup(btn) {
+    const stamp = new Date();
+    const out = [`-- ${ORG} Employee Portal — all records, ${stamp.toLocaleString()}`,
+      '-- Made with Audit Log → Download all records. To restore into a NEW Supabase project:',
+      '--   1. Run schema.sql in its SQL Editor.   2. Run this whole file there.',
+      '--   3. Point config.js at the new project, upload the website, and set up the email settings and functions (see README).',
+      '--   4. Everyone signs in with "Forgot password" once (passwords can\'t be copied).',
+      '-- Not included: unsigned timesheet drafts, other people\'s private calendar events, reminder bookkeeping.',
+      '', 'begin;', 'set local session_replication_role = replica;   -- load as-is: no checks, no audit entries, no emails', ''];
+    const counts = [];
+    for (const [table, order] of BACKUP_TABLES) {
+      btn.textContent = `Reading ${table.replace(/_/g, ' ')}…`;
+      const rows = await fetchAll(table, order);
+      if (rows === null) continue;
+      counts.push(`${table}: ${rows.length}`);
+      if (table === 'profiles') {
+        // the logins themselves, same ids, so every record still points at the right person
+        const people = rows.filter((p) => p.email);
+        if (people.length) {
+          out.push('-- Logins (no passwords: each person uses "Forgot password")');
+          for (let i = 0; i < people.length; i += 200) {
+            const chunk = people.slice(i, i + 200);
+            out.push(`insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at, confirmation_token, recovery_token, email_change_token_new, email_change) values\n${chunk.map((p) =>
+              `  ('00000000-0000-0000-0000-000000000000', ${sqlVal(p.id)}, 'authenticated', 'authenticated', ${sqlVal(p.email)}, '', now(), '{"provider":"email","providers":["email"]}', ${sqlVal({ full_name: p.full_name || '' })}, ${sqlVal(p.created_at || stamp.toISOString())}, now(), '', '', '', '')`).join(',\n')}\non conflict (id) do nothing;`);
+            out.push(`insert into auth.identities (id, provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at) values\n${chunk.map((p) =>
+              `  (gen_random_uuid(), ${sqlVal(p.id)}, ${sqlVal(p.id)}, ${sqlVal({ sub: p.id, email: p.email, email_verified: true })}, 'email', now(), now(), now())`).join(',\n')}\non conflict do nothing;`);
+          }
+          out.push('');
+        }
+      }
+      if (!rows.length) continue;
+      const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+      out.push(`-- ${table} (${rows.length})`);
+      for (let i = 0; i < rows.length; i += 200) {
+        const chunk = rows.slice(i, i + 200);
+        out.push(`insert into public.${table} (${cols.join(', ')})${table === 'audit_log' ? ' overriding system value' : ''} values\n${chunk.map((r) =>
+          `  (${cols.map((c) => sqlVal(r[c])).join(', ')})`).join(',\n')}\non conflict do nothing;`);
+      }
+      out.push('');
+    }
+    out.push("select setval(pg_get_serial_sequence('public.audit_log', 'id'), greatest(coalesce((select max(id) from public.audit_log), 1), 1));",
+      'commit;', '', `-- Counts: ${counts.join(', ')}`, '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([out.join('\n')], { type: 'text/plain' }));
+    a.download = `${(PORTAL_LABEL || 'sheriffs-office').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-all-records-${isoDate(stamp)}.sql`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    return counts;
+  }
+
   views.audit = async (el) => {
     const f = state.audit;
     const people = await loadPeople();
@@ -3193,6 +3271,11 @@
         <h2>Database setup</h2>
         <p class="muted">Download every table, function and security rule as one SQL file, as a backup or to share for review. It contains no records.</p>
         <button class="btn" type="button" id="db-export">Download database setup</button>
+      </section>
+      <section class="card">
+        <h2>All records</h2>
+        <p class="muted">Every person, timesheet, time-off and comp request, uniform order, case number, calendar event, off-duty job, stat and audit entry, as one restore file. Save one to a county drive every month. With schema.sql it rebuilds the portal in a new Supabase project; people then reset their passwords once.</p>
+        <button class="btn primary" type="button" id="rec-export">Download all records</button>
       </section>
       <section class="card">
         <h2>Audit log</h2>
@@ -3232,6 +3315,13 @@
     };
     ['actor', 'subject', 'area'].forEach((n) => { form[n].onchange = () => form.requestSubmit(); });
     if ($('#audit-clear')) $('#audit-clear').onclick = () => { Object.assign(f, { actor: '', subject: '', area: '', from: '', to: '', page: 0 }); showView('audit'); };
+    $('#rec-export').onclick = (e) => {
+      const b = e.currentTarget, label = b.textContent;
+      b.disabled = true;
+      downloadRecordsBackup(b).then((counts) => toast(`Downloaded: ${counts.length} tables.`))
+        .catch((err) => toast(err.message || String(err), true))
+        .finally(() => { b.disabled = false; b.textContent = label; });
+    };
     $('#db-export').onclick = (e) => withBusy(e.currentTarget, async () => {
       const { data: sql, error: err } = await sb.rpc('export_db_setup');
       if (err) throw err;
