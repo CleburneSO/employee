@@ -432,6 +432,14 @@ alter table public.profiles add column if not exists comp_time boolean default f
 alter table public.time_off_requests add column if not exists approver_alerted_at timestamp with time zone;
 -- Comp time earned: the hours actually worked. hours = the comp hours credited (time and a half).
 alter table public.time_off_requests add column if not exists hours_worked numeric(6,2);
+-- People who don't do their timesheets in the portal: no reminders, not listed as missing
+alter table public.profiles add column if not exists no_timesheet boolean default false not null;
+-- Paid-hours cap per pay period (e.g. 80). Regular, holiday, vacation and sick hours over the cap print
+-- on the timesheet as Comp Time Earned instead of being paid; special duties are still paid on top.
+alter table public.profiles add column if not exists hours_cap numeric(6,2) check (hours_cap is null or hours_cap > 0);
+-- The cap that applied when the timesheet was signed, and the hours over it
+alter table public.timesheets add column if not exists hours_cap numeric(6,2);
+alter table public.timesheets add column if not exists cap_comp_hours numeric(6,2) default 0 not null;
 -- Timesheets a manager filled out or fixed for someone: they wait for the employee to sign
 alter table public.timesheets add column if not exists prepared_by uuid references public.profiles(id);
 alter table public.timesheets add column if not exists prepared_at timestamp with time zone;
@@ -720,6 +728,8 @@ begin
     new.reports_to := null;
     new.timeoff_approver := false;
     new.comp_time := false;
+    new.no_timesheet := false;
+    new.hours_cap := null;
     return new;
   end if;
 
@@ -737,6 +747,8 @@ begin
     new.reports_to := old.reports_to;
     new.timeoff_approver := old.timeoff_approver;
     new.comp_time := old.comp_time;
+    new.no_timesheet := old.no_timesheet;
+    new.hours_cap := old.hours_cap;
   end if;
   -- Only the time-off approvers (or the site owner) choose who approves time off, and only they can
   -- change an approver's role or turn off their account, so other managers (e.g. clerks) can't
@@ -849,6 +861,7 @@ begin
         new.duty_hours       := old.duty_hours;
         new.notes            := old.notes;
         new.signature_data   := old.signature_data;
+        new.hours_cap        := old.hours_cap;
         new.signed_name      := old.signed_name;
         new.signed_at        := old.signed_at;
         new.reviewed_by      := auth.uid();
@@ -882,6 +895,8 @@ begin
     -- When the employee signs (or a manager prepares it): keep only special duties assigned
     -- to them, and save each line's current label/note with the timesheet.
     if new.status in ('submitted', 'needs_signature') then
+      -- the person's paid-hours cap at the time it's signed (or filled in)
+      new.hours_cap := (select hours_cap from public.profiles where id = new.user_id);
       -- Time is kept in 15-minute increments
       if exists (select 1 from jsonb_array_elements(coalesce(new.entries, '[]'::jsonb)) e
                  where coalesce(e->>'in', '') !~ '^([01][0-9]|2[0-3]):(00|15|30|45)$' and coalesce(e->>'in', '') <> ''
@@ -948,8 +963,12 @@ begin
     from jsonb_array_elements(coalesce(new.entries, '[]'::jsonb)) e
     where coalesce(e->>'duty_id', '') = ''
   ), 0);
+  -- Capped people (e.g. 80 hours): regular + holiday + vacation + sick over the cap become Comp Time Earned
+  new.cap_comp_hours := case when new.hours_cap is not null
+      then greatest(new.total_hours + new.vacation_hours + new.holiday_hours + new.sick_hours
+                    + new.traffic_ot_hours + new.k9_hours - new.hours_cap, 0) else 0 end;
   new.total_paid_hours := new.total_hours + new.vacation_hours + new.holiday_hours
-                        + new.sick_hours + new.traffic_ot_hours + new.k9_hours
+                        + new.sick_hours + new.traffic_ot_hours + new.k9_hours - new.cap_comp_hours
                         + coalesce((select sum(coalesce((x->>'hours')::numeric, 0))
                                     from jsonb_array_elements(coalesce(new.duty_hours, '[]'::jsonb)) x
                                     where coalesce((x->>'paid')::boolean, true)), 0);   -- e.g. Comp Time Earned is banked, not paid

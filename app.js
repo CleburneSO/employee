@@ -563,8 +563,10 @@
     const cur = currentPeriod(), prev = previousPeriod();
     const joined = state.profile.created_at ? isoDate(new Date(state.profile.created_at)) : '';
     const want = [];
-    if (prev !== cur && periodEnd(prev) >= joined) want.push(prev);
-    if (periodEnd(cur) === isoDate(new Date())) want.push(cur);
+    if (!state.profile.no_timesheet) {   // people who don't do timesheets here get no "due" banner
+      if (prev !== cur && periodEnd(prev) >= joined) want.push(prev);
+      if (periodEnd(cur) === isoDate(new Date())) want.push(cur);
+    }
     const [{ data, error }, sign] = await Promise.all([
       want.length ? sb.from('timesheets').select('period_start, status').eq('user_id', me()).in('period_start', want) : { data: [] },
       sb.from('timesheets').select('period_start').eq('user_id', me()).eq('status', 'needs_signature')
@@ -730,9 +732,14 @@
     // lines that aren't paid (e.g. Comp Time Earned) print but don't count toward hours to be paid
     const special = readDuties().filter((d) => $(`#d-${d.duty_id}`)?.dataset.paid !== 'false').reduce((a, d) => a + d.hours, 0);
     $$('.duty-input').forEach((i) => i.closest('tr').classList.toggle('has-hours', num(i.value) > 0));
-    const paid = worked + special + Object.values(x).reduce((a, b) => a + b, 0);
+    // A paid-hours cap (e.g. 80): regular + holiday/vacation/sick over it becomes Comp Time Earned
+    const base = worked + Object.values(x).reduce((a, b) => a + b, 0);
+    const cap = Number((tsPerson || state.profile)?.hours_cap) || 0;
+    const over = cap && base > cap ? round2(base - cap) : 0;
+    const paid = base - over + special;
     $('#ts-total').textContent = hrs(worked);
     $('#ts-paid').textContent = hrs(paid);
+    if ($('#ts-cap-row')) { $('#ts-cap-row').hidden = !over; $('#ts-cap').textContent = hrs(over); }
     const warn = $('#ts-warn');
     if (x.sick_hours > 0 && worked + x.holiday_hours + x.sick_hours > 80) {
       warn.textContent = `Heads up: worked + holiday + sick comes to ${hrs(worked + x.holiday_hours + x.sick_hours)} hours. Sick leave stops once you reach 80 hours (including holiday hours).`;
@@ -802,6 +809,8 @@
                 <th><label for="d-${d.id}">${esc(d.label)}</label> <span class="chip">${esc(d.name)}</span></th>
                 <td><input type="number" id="d-${d.id}" class="duty-input" data-duty="${d.id}" data-paid="${d.paid === false ? 'false' : 'true'}" min="0" step="0.25" placeholder="0" inputmode="decimal"></td>
                 <td class="hint">${esc(d.note)}${d.paid === false && !/not added/i.test(d.note || '') ? ' <em>Not added to Hours To Be Paid.</em>' : ''}<span class="auto-note">Filled in from your ${esc(d.name)} time blocks above.</span></td></tr>`).join('')}
+              ${Number((other || state.profile).hours_cap) ? `<tr class="total" id="ts-cap-row" hidden><th>Comp Time Earned (over ${hrs((other || state.profile).hours_cap)} hours)</th><td class="num" id="ts-cap">0</td>
+                <td class="hint">Hours over the ${hrs((other || state.profile).hours_cap)}-hour cap. Not paid; kept by HR as comp time. Special duties are still paid.</td></tr>` : ''}
               <tr class="total"><th>Total Hours To Be Paid</th><td class="num" id="ts-paid">0</td><td></td></tr>
             </tbody>
           </table></div>
@@ -1156,6 +1165,7 @@
           ${sumRow('Total Hours Worked', hrs(t.total_hours), 'This is the number of hours you actually worked.')}
           ${EXTRA_HOURS.map(([k, label, note]) => sumRow(label, blankIfZero(t[k]), note, k === 'sick_hours' ? 'tall' : '')).join('')}
           ${duties.map((d) => sumRow(d.label, blankIfZero(d.hours), d.note, d.hours > 0 ? 'duty hl' : 'duty')).join('')}
+          ${Number(t.cap_comp_hours) ? sumRow(`Comp Time Earned (over ${hrs(t.hours_cap)} hours)`, hrs(t.cap_comp_hours), 'Not paid. Kept by HR as comp time.', 'duty hl') : ''}
           ${sumRow('Total Hours To Be Paid', hrs(t.total_paid_hours), '')}
         </tbody>
       </table>
@@ -1809,7 +1819,7 @@
     const missing = due.map((p) => {
       const status = Object.fromEntries(dueTs.data.filter((t) => t.period_start === p).map((t) => [t.user_id, t.status]));
       const joinedBy = (x) => !x.created_at || isoDate(new Date(x.created_at)) <= periodEnd(p);   // not people who started after it
-      const list = people.filter((x) => x.active !== false && joinedBy(x) && !['submitted', 'approved'].includes(status[x.id]))
+      const list = people.filter((x) => x.active !== false && !x.no_timesheet && joinedBy(x) && !['submitted', 'approved'].includes(status[x.id]))
         .map((x) => ({ ...x, sentBack: status[x.id] === 'rejected', toSign: status[x.id] === 'needs_signature' }));
       return { p, list };
     }).filter((g) => g.list.length);
@@ -1938,12 +1948,12 @@
       if ($('#exp-layout').value === 'summary') {
         // one column per special duty that shows up in this pay period
         const dutyNames = [...new Set(data.flatMap((t) => dutyLines(t).filter((d) => d.hours > 0).map((d) => d.name)))];
-        rows = [['Employee', 'Email', 'Period start', 'Period end', 'Hours worked', ...extraHeads, ...dutyNames, 'Total to be paid', 'Status', 'Signed by', 'Signed at']];
+        rows = [['Employee', 'Email', 'Period start', 'Period end', 'Hours worked', ...extraHeads, ...dutyNames, 'Comp earned (over cap)', 'Total to be paid', 'Status', 'Signed by', 'Signed at']];
         for (const t of data) {
           const lines = dutyLines(t);
           const dutyVals = dutyNames.map((n) => lines.filter((d) => d.name === n).reduce((a, d) => a + d.hours, 0));
           rows.push([personName(t.user_id), state.people[t.user_id]?.email || '', t.period_start, periodEnd(t.period_start),
-            Number(t.total_hours), ...extraVals(t), ...dutyVals, Number(t.total_paid_hours), t.status, t.signed_name, t.signed_at]);
+            Number(t.total_hours), ...extraVals(t), ...dutyVals, Number(t.cap_comp_hours || 0), Number(t.total_paid_hours), t.status, t.signed_name, t.signed_at]);
         }
       } else {
         rows = [['Employee', 'Email', 'Date', 'Time in', 'Time out', 'Hours', 'Type', 'Explanation', 'Status']];
@@ -3337,6 +3347,8 @@
       on('stats') && p.patrol ? `Patrol${p.shift ? ' · ' + p.shift + ' Shift' : ''}` : '',
       on('stats') && p.is_supervisor ? 'Supervisor' : '',
       on('stats') && p.reports_to ? `Reports to ${personName(p.reports_to)}` : '',
+      p.hours_cap ? `Capped at ${hrs(p.hours_cap)} hrs` : '',
+      p.no_timesheet ? 'No timesheets here' : '',
       ...myDuties.map((d) => d.name)
     ].filter(Boolean);
     const tile = (title, big, sub, buttons = '') => `<div class="pf-tile"><div class="pf-tile-title">${title}</div>
@@ -3493,6 +3505,13 @@
           <div class="duty-checks">${dutyBoxes}</div>
         </fieldset>
 
+        ${'hours_cap' in p ? `<fieldset class="person-set">
+          <legend>Timesheets</legend>
+          <label class="check"><input type="checkbox" name="no_timesheet" ${p.no_timesheet ? 'checked' : ''}> <span><strong>Doesn’t do timesheets here</strong> — no reminder emails or banners, and not listed under “Haven’t submitted”. They can still use My Timesheets.</span></label>
+          <label class="narrow">Cap paid hours per pay period<input type="number" name="hours_cap" min="1" step="0.25" inputmode="decimal" placeholder="No cap" value="${p.hours_cap ? esc(Number(p.hours_cap)) : ''}"></label>
+          <p class="hint">E.g. 80. Regular, holiday, vacation and sick hours over the cap print as <strong>Comp Time Earned</strong> on their timesheet instead of being paid. Special duties (like Traffic OT) are still paid.</p>
+        </fieldset>` : ''}
+
         ${compPerPerson && 'comp_time' in p ? `<fieldset class="person-set">
           <legend>Comp time</legend>
           <label class="check"><input type="checkbox" name="comp_time" ${p.comp_time ? 'checked' : ''}> <span><strong>Has comp time</strong> — can log comp time earned, see their balance and use comp time off.</span></label>
@@ -3535,6 +3554,12 @@
       };
       if (!self && !lockApprover) update.role = f.role.value;
       if (f.comp_time) update.comp_time = f.comp_time.checked;
+      if (f.hours_cap) {
+        update.no_timesheet = f.no_timesheet.checked;
+        const cap = f.hours_cap.value.trim() === '' ? null : Number(f.hours_cap.value);
+        if (cap !== null && !(cap > 0 && isHalfStep(cap))) { toast('The hours cap must be a number like 80 (quarter hours are OK), or blank for no cap.', true); return; }
+        update.hours_cap = cap;
+      }
       if (f.timeoff_approver && !f.timeoff_approver.disabled) {
         update.timeoff_approver = f.timeoff_approver.checked;
         if (update.timeoff_approver && (update.role || p.role) !== 'manager') { toast('Only managers can approve time off. Change their role to Manager first.', true); return; }
