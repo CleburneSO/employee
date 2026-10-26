@@ -541,12 +541,15 @@ CREATE OR REPLACE FUNCTION public.can_see_event(p_event uuid)
  STABLE SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-  -- Personal events: only their owner. Office events: managers, plus the people on them
-  -- (or everyone, for "show to everyone").
+  -- Personal events: their owner, plus whoever they shared it with (everyone, or the people
+  -- tagged on it). Office events: managers, plus the people on them (or everyone, for "show to everyone").
   select public.is_active() and exists (
     select 1 from public.events e
     where e.id = p_event
       and case when e.owner_id is not null then e.owner_id = auth.uid()
+                    or e.for_everyone
+                    or exists (select 1 from public.event_people ep
+                               where ep.event_id = e.id and ep.user_id = auth.uid())
                else public.is_manager()
                     or e.for_everyone
                     or exists (select 1 from public.event_people ep
@@ -1314,8 +1317,8 @@ begin
 end $function$
 ;
 
--- Personal events stay personal: always type "personal", never shown to everyone,
--- and an event can't be switched between personal and office.
+-- Personal events stay personal: always type "personal" and only their owner changes them
+-- (they can share one with everyone or tag people), and an event can't be switched between personal and office.
 CREATE OR REPLACE FUNCTION public.events_personal_guard()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -1327,7 +1330,6 @@ begin
   end if;
   if new.owner_id is not null then
     new.kind := 'personal';
-    new.for_everyone := false;
     new.holiday_hours := 8;
   elsif new.kind = 'personal' then
     raise exception 'Personal events belong to one person.';
@@ -1809,6 +1811,11 @@ create policy duties_select on public.duties as PERMISSIVE for SELECT to authent
 drop policy if exists event_people_manage on public.event_people;
 create policy event_people_manage on public.event_people as PERMISSIVE for ALL to authenticated using ((is_manager() AND (EXISTS ( SELECT 1 FROM events e WHERE ((e.id = event_people.event_id) AND (e.owner_id IS NULL)))))) with check ((is_manager() AND (EXISTS ( SELECT 1 FROM events e WHERE ((e.id = event_people.event_id) AND (e.owner_id IS NULL))))));
 
+-- The owner of a personal event chooses who it's shared with
+drop policy if exists event_people_owner on public.event_people;
+create policy event_people_owner on public.event_people as PERMISSIVE for ALL to authenticated
+  using ((is_active() AND (EXISTS ( SELECT 1 FROM events e WHERE ((e.id = event_people.event_id) AND (e.owner_id = auth.uid()))))))
+  with check ((is_active() AND (EXISTS ( SELECT 1 FROM events e WHERE ((e.id = event_people.event_id) AND (e.owner_id = auth.uid()))))));
 drop policy if exists event_people_select on public.event_people;
 create policy event_people_select on public.event_people as PERMISSIVE for SELECT to authenticated using (can_see_event(event_id));
 

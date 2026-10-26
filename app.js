@@ -2023,6 +2023,12 @@
   const multiline = (s) => esc(s || '').replace(/\n/g, '<br>');
   const EVENT_KINDS = [['training', 'Training'], ['court', 'Court'], ['holiday', 'Paid holiday'], ['other', 'Other']];
   const kindLabel = (k) => (k === 'personal' ? 'My event' : k === 'offduty' ? 'Off-duty' : (EVENT_KINDS.find(([x]) => x === k) || [k, k])[1]);
+  // A personal event someone else shared with you shows as theirs
+  const evLabel = (e) => (e.kind === 'personal' && e.owner_id && e.owner_id !== me() ? `${dirName(e.owner_id)}’s event` : kindLabel(e.kind));
+  const shareText = (e, tagged) => !e.owner_id ? ''
+    : e.owner_id !== me() ? `Shared by ${dirName(e.owner_id)}.`
+    : e.for_everyone ? 'Shared with everyone.'
+    : tagged.length ? `Shared with ${tagged.length === 1 ? dirName(tagged[0]) : tagged.length + ' people'}.` : 'Only you can see this.';
   function peoplePicker(list, selected = new Set()) {
     return `<div class="picker-tools"><button type="button" class="btn small" data-pick="all">Select all</button><button type="button" class="btn small" data-pick="none">Clear</button><span class="hint picker-count"></span></div>
     <div class="people-picker">${list.filter((p) => p.active !== false).map((p) =>
@@ -2122,7 +2128,7 @@
             ${isManager() ? `<div class="seg-toggle" role="group" aria-label="Whose events">
               <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
             </div>` : ''}
-            <button class="btn small${isManager() ? '' : ' primary'}" id="my-ev-new" title="A personal event only you can see">Add my event</button>
+            <button class="btn small${isManager() ? '' : ' primary'}" id="my-ev-new" title="Your own event: keep it private or share it">Add my event</button>
             ${isManager() ? '<button class="btn small primary" id="ev-new">Add event</button>' : ''}</div>
         </div>
         <div class="cal-grid">
@@ -2143,7 +2149,7 @@
         <h2>${isManager() && !state.calMine ? 'Coming up (next 15 days)' : 'Coming up for you (next 15 days)'}</h2>
                 ${soonEv.data.length ? `<ul class="agenda">${soonEv.data.map((e) => `<li class="${mine(e) ? 'is-mine' : ''}">
             <button class="agenda-item" data-ev="${e.id}">
-              <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
+              <span class="tag tag-${e.kind}">${esc(evLabel(e))}</span>
               <span class="agenda-title">${esc(e.title)}${mine(e) && !e.owner_id ? ' <span class="tag tag-mine">You</span>' : ''}${e.isJob && !e.mineJob ? ` <span class="muted">${e.left} spot${e.left === 1 ? '' : 's'} open</span>` : ''}${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}</span>
               <span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}${e.location ? ` · ${esc(e.location)}` : ''}</span>
             </button></li>`).join('')}</ul>` : '<p class="muted">Nothing scheduled.</p>'}
@@ -2178,7 +2184,7 @@
 
   function openDay(iso, evs, tags, people) {
     openModal(`<h2>${esc(fmtDate(iso))}</h2><ul class="agenda">${evs.map((e) => `<li>
-      <button class="agenda-item" data-ev="${e.id}"><span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>
+      <button class="agenda-item" data-ev="${e.id}"><span class="tag tag-${e.kind}">${esc(evLabel(e))}</span>
       <span class="agenda-title">${esc(e.title)}</span><span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</span></button></li>`).join('')}</ul>
       <div class="actions"><button class="btn small" id="day-my-ev">Add my event this day</button></div>`);
     $$('#modal-body [data-ev]').forEach((b) => { b.onclick = () => openEvent(evs.find((e) => e.id === b.dataset.ev), tags[b.dataset.ev] || [], people); });
@@ -2190,13 +2196,13 @@
     const names = tagged.map(dirName).sort();
     openModal(`
       <div class="doc">
-        <span class="tag tag-${e.kind}">${esc(kindLabel(e.kind))}</span>${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}${e.owner_id ? ' <span class="muted">Only you can see this.</span>' : ''}
+        <span class="tag tag-${e.kind}">${esc(evLabel(e))}</span>${e.for_everyone ? ' <span class="tag">Everyone</span>' : ''}${e.owner_id ? ` <span class="muted">${esc(shareText(e, tagged))}</span>` : ''}
         <h2 style="margin-top:.4rem">${esc(e.title)}</h2>
         <dl class="details">
           <dt>When</dt><dd>${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</dd>
           ${e.kind === 'holiday' ? `<dt>Paid</dt><dd>${hrs(e.holiday_hours ?? 8)} hours (added to timesheets automatically)</dd>` : ''}
           ${e.location ? `<dt>Where</dt><dd>${esc(e.location)}</dd>` : ''}
-          ${names.length ? `<dt>${e.kind === 'court' ? 'Deputies' : 'People'}</dt><dd>${names.map((n) => `<span class="chip ${tagged.includes(me()) && n === dirName(me()) ? '' : 'muted-chip'}">${esc(n)}</span>`).join(' ')}</dd>` : ''}
+          ${names.length ? `<dt>${e.kind === 'court' ? 'Deputies' : e.owner_id ? 'Shared with' : 'People'}</dt><dd>${names.map((n) => `<span class="chip ${tagged.includes(me()) && n === dirName(me()) ? '' : 'muted-chip'}">${esc(n)}</span>`).join(' ')}</dd>` : ''}
           ${e.details ? `<dt>Details</dt><dd>${multiline(e.details)}</dd>` : ''}
         </dl>
         <div class="actions">
@@ -2205,7 +2211,7 @@
         </div>
       </div>`);
     $('#ev-ics').onclick = (ev) => withBusy(ev.currentTarget, () => addToPhoneCalendar(e));
-    $('#ev-edit')?.addEventListener('click', () => (e.owner_id ? editPersonal(e) : editEvent(e, tagged, people)));
+    $('#ev-edit')?.addEventListener('click', () => (e.owner_id ? editPersonal(e, tagged) : editEvent(e, tagged, people)));
   }
 
   // "Add to my calendar": a standard calendar file (.ics) that the phone's or computer's calendar
@@ -2267,13 +2273,15 @@
     $('#ev-ics')?.addEventListener('click', (ev) => withBusy(ev.currentTarget, () => addToPhoneCalendar({ ...e, id: j.id, title: `Off-duty: ${j.title}` })));
   }
 
-  // A personal event: only its owner can see it (the database enforces this). No emails.
-  function editPersonal(e) {
+  // A personal event: private, shared with everyone, or shared with picked people (the database
+  // enforces who sees it; only the owner can change it). No emails.
+  function editPersonal(e, tagged = []) {
     const [sd, st] = toLocalInput(e.starts_at);
     const [ed, et] = toLocalInput(e.ends_at);
+    const share = e.for_everyone ? 'everyone' : tagged.length ? 'pick' : 'me';
+    const others = Object.values(state.dir).filter((x) => x.id !== me()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
     openModal(`
       <h2>${e.id ? 'Edit my event' : 'Add my event'}</h2>
-      <p class="hint">Only you can see this.</p>
       <form id="pe-form" autocomplete="off">
         <label>Title<input name="title" required maxlength="200" value="${esc(e.title || '')}" placeholder="e.g. Training, Vacation, To-Do, etc."></label>
         <label class="check"><input type="checkbox" name="all_day" ${e.all_day ? 'checked' : ''}><span>All day</span></label>
@@ -2285,12 +2293,25 @@
         </div>
         <label>Location<input name="location" value="${esc(e.location || '')}"></label>
         <label>Notes<textarea name="details" rows="3">${esc(e.details || '')}</textarea></label>
+        <fieldset class="person-set">
+          <legend>Who can see this</legend>
+          <label class="check"><input type="radio" name="share" value="me" ${share === 'me' ? 'checked' : ''}><span>Only me</span></label>
+          <label class="check"><input type="radio" name="share" value="everyone" ${share === 'everyone' ? 'checked' : ''}><span>Everyone</span></label>
+          <label class="check"><input type="radio" name="share" value="pick" ${share === 'pick' ? 'checked' : ''}><span>Pick people</span></label>
+          <div id="pe-pick" ${share === 'pick' ? '' : 'hidden'}>${peoplePicker(others, new Set(tagged))}</div>
+          <p class="hint">Others see it on their calendar with your name. Only you can change or delete it.</p>
+        </fieldset>
         <div class="actions">
           <button class="btn primary" type="submit">${e.id ? 'Save' : 'Add to my calendar'}</button>
           ${e.id ? '<button class="btn danger" type="button" id="pe-del">Delete</button>' : ''}
         </div>
       </form>`);
     const f = $('#pe-form');
+    const pick = $('#pe-pick');
+    const count = () => { $('.picker-count', pick).textContent = `${$$('.people-picker input:checked', pick).length} picked`; };
+    $$('[data-pick]', pick).forEach((b) => { b.onclick = () => { $$('.people-picker input', pick).forEach((c) => { c.checked = b.dataset.pick === 'all'; }); count(); }; });
+    pick.addEventListener('change', count); count();
+    $$('input[name=share]', f).forEach((r) => { r.onchange = () => { $('#pe-pick').hidden = f.share.value !== 'pick'; }; });
     const syncAllDay = () => { $$('.time-f', f).forEach((l) => l.classList.toggle('hidden', f.all_day.checked)); };
     f.all_day.onchange = syncAllDay; syncAllDay();
     f.onsubmit = (ev) => {
@@ -2305,12 +2326,21 @@
         };
         if (!row.title) throw new Error('Give it a title.');
         if (row.ends_at && row.ends_at < row.starts_at) throw new Error('The end is before the start.');
+        const mode = f.share.value;
+        const picked = mode === 'pick' ? $$('#pe-pick input[type=checkbox]:checked').map((c) => c.value) : [];
+        if (mode === 'pick' && !picked.length) throw new Error('Pick at least one person, or choose Only me.');
+        row.for_everyone = mode === 'everyone';
         const r = e.id
-          ? await sb.from('events').update({ ...row, updated_at: new Date().toISOString() }).eq('id', e.id)
-          : await sb.from('events').insert({ ...row, kind: 'personal', owner_id: me(), created_by: me() });
+          ? await sb.from('events').update({ ...row, updated_at: new Date().toISOString() }).eq('id', e.id).select('id').single()
+          : await sb.from('events').insert({ ...row, kind: 'personal', owner_id: me(), created_by: me() }).select('id').single();
         if (r.error) throw r.error;
+        // who it's shared with
+        const id = r.data.id;
+        const drop = tagged.filter((u) => !picked.includes(u)), add = picked.filter((u) => !tagged.includes(u));
+        if (drop.length) { const d = await sb.from('event_people').delete().eq('event_id', id).in('user_id', drop); if (d.error) throw d.error; }
+        if (add.length) { const a = await sb.from('event_people').insert(add.map((user_id) => ({ event_id: id, user_id }))); if (a.error) throw a.error; }
         closeModal();
-        toast(e.id ? 'Saved.' : 'Added to your calendar.');
+        toast(e.id ? 'Saved.' : mode === 'me' ? 'Added to your calendar.' : 'Added and shared.');
         showView('calendar');
       });
     };
