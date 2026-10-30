@@ -179,10 +179,27 @@ Deno.serve(async (req) => {
       if (!isMgr && r.reviewed_by !== me.id) throw Object.assign(new Error('Not allowed.'), { status: 403 });
       to = await people([r.user_id]);
       const range = r.start_date === r.end_date ? fmtDate(r.start_date) : `${fmtDate(r.start_date)} – ${fmtDate(r.end_date)}`;
-      subject = `Time off ${r.status}: ${range}`;
-      html = page(SITE, `Your time-off request was ${r.status}`, [
-        `<strong>${esc(range)}</strong> (${esc(r.type)})`, r.manager_note ? `Note: “${esc(r.manager_note)}”` : ''
-      ]);
+      const hrs = (n) => `${Number(n)} hour${Number(n) === 1 ? '' : 's'}`;
+      const note = r.manager_note ? `Note: “${esc(r.manager_note)}”` : '';
+      if (r.type === 'comp_earned') {
+        // comp time earned isn't time off: say what was credited
+        const worked = r.hours_worked != null ? `${hrs(r.hours_worked)} worked × 1.5 = ` : '';
+        subject = `Comp time earned ${r.status}: ${range}`;
+        html = page(SITE, `Your comp time earned was ${r.status}`, [
+          `Day worked: <strong>${esc(range)}</strong>`,
+          r.status === 'approved' ? `${esc(worked)}<strong>${esc(hrs(r.hours))}</strong> added to your comp balance.`
+            : `${esc(hrs(r.hours))} of comp time were <strong>not</strong> added to your balance.`,
+          r.reason ? `For: “${esc(r.reason)}”` : '', note
+        ]);
+      } else {
+        const kind = ({ vacation: 'Vacation', sick: 'Sick leave', comp: 'Comp time off' } as Record<string, string>)[r.type] || 'Time off';
+        subject = `${kind} ${r.status}: ${range}`;
+        html = page(SITE, `Your ${kind.toLowerCase()} request was ${r.status}`, [
+          `<strong>${esc(range)}</strong>${r.hours != null ? ` · ${esc(hrs(r.hours))}` : ''}`,
+          r.type === 'comp' && r.status === 'approved' ? `${esc(hrs(r.hours))} taken from your comp balance.` : '',
+          note
+        ]);
+      }
     } else if (type === 'uniform_request' || type === 'uniform_decision') {
       const money = (n) => Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
       const itemRows = (o) => `<table cellpadding="4" style="border-collapse:collapse;font-size:14px;margin:4px 0 10px">${(o.items || []).map((x) =>
