@@ -976,6 +976,21 @@ begin
 end $function$
 ;
 
+-- Is the signed-in person a shift supervisor who decides this request? Same shift letter (A/B),
+-- not their own request, and only vacation, sick or comp time used (comp earned stays with the
+-- sheriff and chief deputy).
+CREATE OR REPLACE FUNCTION public.can_decide_shift_time_off(p_user uuid, p_type text)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select p_type in ('vacation', 'sick', 'comp') and p_user <> auth.uid() and exists (
+    select 1 from public.profiles s join public.profiles e on e.id = p_user
+    where s.id = auth.uid() and s.active and s.is_supervisor and s.shift is not null and e.shift = s.shift);
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.time_off_guard()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -1026,17 +1041,15 @@ begin
   new.created_at := old.created_at;
   new.approver_alerted_at := old.approver_alerted_at;
 
-  -- Manager decision (only the time-off approvers: the sheriff and chief deputy)
-  if public.is_manager() and not public.is_timeoff_approver()
-     and new.status in ('approved', 'denied') and new.status is distinct from old.status then
-    raise exception 'Only the sheriff or chief deputy can approve or deny time off.';
-  end if;
-  if public.is_timeoff_approver()
-     and new.status in ('approved', 'denied')
-     and new.status is distinct from old.status then
-    new.reviewed_by := auth.uid();
-    new.reviewed_at := now();
-    return new;
+  -- Decision: the time-off approvers (the sheriff and chief deputy) for anything, and a shift
+  -- supervisor for vacation, sick or comp time used by someone on their shift
+  if new.status in ('approved', 'denied') and new.status is distinct from old.status then
+    if public.is_timeoff_approver() or public.can_decide_shift_time_off(old.user_id, old.type) then
+      new.reviewed_by := auth.uid();
+      new.reviewed_at := now();
+      return new;
+    end if;
+    raise exception 'Only the sheriff, chief deputy or their shift supervisor can approve or deny this.';
   end if;
 
   -- Employee cancelling their own pending request
@@ -1686,7 +1699,7 @@ revoke execute on function public.audit_trigger(), public.case_numbers_guard(), 
   public.uniform_allowance(), public.uniform_fy_start(date), public.uniform_current_fy()
   from authenticated;
 grant execute on function public.is_active(), public.is_manager(), public.is_owner(), public.is_timeoff_approver(),
-  public.can_see_event(uuid), public.can_see_stats_of(uuid),
+  public.can_see_event(uuid), public.can_see_stats_of(uuid), public.can_decide_shift_time_off(uuid, text),
   public.comp_balances(), public.people_directory(), public.patrol_stats_month(date), public.patrol_shift_totals(date),
   public.reserve_case_number(date, text, text, text, text), public.set_next_case_seq(integer, integer)
   to authenticated;
@@ -1893,10 +1906,10 @@ drop policy if exists time_off_insert on public.time_off_requests;
 create policy time_off_insert on public.time_off_requests as PERMISSIVE for INSERT to authenticated with check (((user_id = auth.uid()) AND is_active()));
 
 drop policy if exists time_off_select on public.time_off_requests;
-create policy time_off_select on public.time_off_requests as PERMISSIVE for SELECT to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
+create policy time_off_select on public.time_off_requests as PERMISSIVE for SELECT to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager() OR can_decide_shift_time_off(user_id, type)));
 
 drop policy if exists time_off_update on public.time_off_requests;
-create policy time_off_update on public.time_off_requests as PERMISSIVE for UPDATE to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
+create policy time_off_update on public.time_off_requests as PERMISSIVE for UPDATE to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager() OR can_decide_shift_time_off(user_id, type)));
 
 drop policy if exists timesheets_insert on public.timesheets;
 create policy timesheets_insert on public.timesheets as PERMISSIVE for INSERT to authenticated with check ((is_active() AND ((user_id = auth.uid()) OR is_manager())));

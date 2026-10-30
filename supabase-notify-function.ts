@@ -173,9 +173,10 @@ Deno.serve(async (req) => {
       subject = `${a.kind === 'training' ? 'Training: ' : ''}${a.title}`;
       html = page(SITE, esc(a.title), [esc(a.body).replace(/\n/g, '<br>')]);
     } else if (type === 'timeoff_decision') {
-      mgrOnly();
       const { data: r } = await db.from('time_off_requests').select('*').eq('id', id).single();
       if (!r || !['approved', 'denied'].includes(r.status)) return json({ ok: true, sent: 0 });
+      // managers, or the shift supervisor who made this decision
+      if (!isMgr && r.reviewed_by !== me.id) throw Object.assign(new Error('Not allowed.'), { status: 403 });
       to = await people([r.user_id]);
       const range = r.start_date === r.end_date ? fmtDate(r.start_date) : `${fmtDate(r.start_date)} – ${fmtDate(r.end_date)}`;
       subject = `Time off ${r.status}: ${range}`;

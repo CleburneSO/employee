@@ -85,6 +85,13 @@
   const canApproveTimeOff = () => isManager() && (!!state.profile?.timeoff_approver || !timeOffApprovers().length);
   // Only approvers (or the site owner) pick who approves, so other managers (e.g. clerks) can't give themselves approval
   const canSetApprovers = () => canApproveTimeOff() || isOwner();
+  // Shift supervisors (People → Supervisor, with a shift) decide vacation, sick and comp time used for
+  // their own shift letter, not their own requests. The database enforces it; deputies only ever
+  // receive the requests they may decide.
+  const isShiftSupervisor = () => !!(state.profile?.is_supervisor && state.profile?.shift);
+  const shiftCanDecide = (r) => isShiftSupervisor() && r.user_id !== me() && ['vacation', 'sick', 'comp'].includes(r.type)
+    && (!isManager() || state.people[r.user_id]?.shift === state.profile.shift);
+  const canDecide = (r) => (isManager() && canApproveTimeOff()) || shiftCanDecide(r);
   const approverNames = () => timeOffApprovers().map((p) => p.full_name || p.email).join(' or ');
   const round2 = (n) => Math.round(n * 100) / 100;
   const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
@@ -1262,13 +1269,21 @@
   }
 
   views.timeoff = async (el) => {
-    const [reqs, bals, adj] = await Promise.all([
+    const since = isoDate(addDays(new Date(), -30));
+    const [reqs, bals, adj, , shiftR] = await Promise.all([
       sb.from('time_off_requests').select('*').eq('user_id', me()).order('start_date', { ascending: false }),
       compBalances(),
       sb.from('comp_adjustments').select('*').eq('user_id', me()).order('created_at', { ascending: false }),
-      isManager() ? null : loadDirectory().catch(() => [])   // names of who approved, for printouts
+      isManager() ? loadPeople() : loadDirectory().catch(() => []),   // names (who approved, who's asking)
+      // a shift supervisor: their shift's requests (waiting, and decided in the last 30 days)
+      isShiftSupervisor() ? sb.from('time_off_requests').select('*').neq('user_id', me()).in('type', ['vacation', 'sick', 'comp'])
+        .or(`status.eq.pending,end_date.gte.${since}`).order('start_date') : { data: [] }
     ]);
     if (reqs.error) throw reqs.error;
+    if (shiftR.error) throw shiftR.error;
+    const shiftReqs = shiftR.data.filter(shiftCanDecide);
+    const shiftWaiting = shiftReqs.filter((r) => r.status === 'pending');
+    const shiftDecided = shiftReqs.filter((r) => ['approved', 'denied'].includes(r.status));
     if (adj.error) throw adj.error;
     const data = reqs.data;
     const b = bals.find((x) => x.user_id === me()) || { balance: 0, pending_earned: 0, pending_used: 0 };
@@ -1326,6 +1341,10 @@
           <button class="btn primary" type="submit" id="to-submit">Submit request</button>
         </form>
       </section>
+      ${isShiftSupervisor() ? `<section class="card" id="shift-reqs"><h2>${esc(state.profile.shift)} Shift requests to approve <span class="count${shiftWaiting.length ? '' : ' muted-count'}">${shiftWaiting.length}</span></h2>
+        <div id="shift-waiting">${shiftWaiting.length ? timeOffTable(shiftWaiting, true) : '<p class="muted">Nothing waiting.</p>'}</div>
+        ${shiftDecided.length ? `<details class="fold"><summary><h3>Recently decided</h3></summary><div id="shift-decided">${timeOffTable(shiftDecided, true)}</div></details>` : ''}
+      </section>` : ''}
       <section class="card"><h2>My requests</h2>${timeOffTable(data, false)}</section>`;
 
     // One form, three things: request time off, use comp time, or log comp time earned
@@ -1396,7 +1415,7 @@
       });
     };
     setMode('off');
-    bindTimeOffButtons(el, data);
+    bindTimeOffButtons(el, data.concat(shiftReqs));
   };
 
   function timeOffTable(list, mgr) {
@@ -1405,7 +1424,7 @@
       <thead><tr>${mgr && mgr !== 'person' ? '<th>Employee</th>' : ''}<th>Dates</th><th class="num">Hours</th><th>Type</th><th>Status</th><th>Note</th><th></th></tr></thead>
       <tbody>${list.map((r) => {
         let action = '';
-        if (mgr && r.status === 'pending' && canApproveTimeOff()) action = `<button class="btn small" data-to="${r.id}">Review</button>`;
+        if (mgr && r.status === 'pending' && canDecide(r)) action = `<button class="btn small" data-to="${r.id}">Review</button>`;
         else if (mgr) action = `<button class="btn small" data-to="${r.id}">View</button>`;
         else action = `${r.status === 'pending' ? `<button class="btn small" data-cancel="${r.id}">Cancel</button> ` : ''}<button class="btn small" data-to="${r.id}">View</button>`;
         return `<tr class="${r.type === 'comp_earned' ? 'is-earned' : ''}">
@@ -1466,7 +1485,7 @@
 
   function openTimeOff(r) {
     // The sheriff / chief deputy can reverse a decision made by mistake (approved ⇄ denied)
-    const canChange = isManager() && canApproveTimeOff() && ['approved', 'denied'].includes(r.status);
+    const canChange = canDecide(r) && ['approved', 'denied'].includes(r.status);
     const flipTo = r.status === 'approved' ? 'denied' : 'approved';
     openModal(`
       <div class="print-area print-only"><div class="sheet-page">${timeOffSheetHTML(r)}</div></div>
@@ -1483,15 +1502,15 @@
         </dl>
         ${reviewInfo(r)}
       </div>
-      ${r.status !== 'pending' || !isManager() ? '' : canApproveTimeOff() ? reviewControls('Deny')
-        : `<p class="notice no-print">Waiting on ${esc(approverNames())} to approve or deny.</p>`}
+      ${r.status !== 'pending' ? '' : canDecide(r) ? reviewControls('Deny')
+        : isManager() ? `<p class="notice no-print">Waiting on ${esc(approverNames())} to approve or deny.</p>` : ''}
       ${canChange ? `<details class="fold review no-print" id="to-change"><summary><h3>Change decision</h3></summary>
         <p class="hint">Made a mistake? This changes it to <strong>${flipTo === 'denied' ? 'denied' : 'approved'}</strong> and emails ${esc(personName(r.user_id, 'the employee'))}. The Audit Log keeps both decisions.</p>
         <label>Note to employee${flipTo === 'denied' ? ' (why it’s being denied)' : ' (optional)'}<textarea id="rv-change-note" rows="2"></textarea></label>
         <div class="actions"><button class="btn ${flipTo === 'denied' ? 'danger' : 'primary'}" id="rv-change">${flipTo === 'denied' ? 'Deny instead' : 'Approve instead'}</button></div></details>` : ''}
       <div class="actions no-print"><button class="btn" id="print-btn">Print / Save PDF</button></div>`);
     $('#print-btn').onclick = () => window.print();
-    if (r.status === 'pending' && canApproveTimeOff()) bindReview('time_off_requests', r.id, 'denied');
+    if (r.status === 'pending' && canDecide(r)) bindReview('time_off_requests', r.id, 'denied');
     if (canChange) {
       $('#rv-change').onclick = (e) => {
         const note = $('#rv-change-note').value.trim();

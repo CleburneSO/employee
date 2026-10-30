@@ -1,6 +1,7 @@
 // Supabase Edge Function: timeoff-alert
-// Emails the time-off approvers (managers ticked "Approves time off" on the Team tab,
-// e.g. the sheriff and chief deputy) when someone requests time off or logs comp time.
+// Emails the time-off approvers (managers ticked "Approves time off" on the People tab,
+// e.g. the sheriff and chief deputy) when someone requests time off or logs comp time, plus
+// the supervisor of their shift for vacation, sick and comp time used.
 //
 // Deploy: Supabase → Edge Functions → Deploy a new function → Via Editor → name it
 // "timeoff-alert" → paste this whole file → Deploy, then turn OFF "Verify JWT"
@@ -63,14 +64,21 @@ Deno.serve(async (req) => {
     if (error) throw error;
     if (!r) return json({ sent: 0, note: 'Nothing to send.' });
 
-    const { data: who } = await admin.from('profiles').select('full_name, email, active').eq('id', r.user_id).single();
+    const { data: who } = await admin.from('profiles').select('full_name, email, active, shift').eq('id', r.user_id).single();
     if (!who?.active) return json({ sent: 0, note: 'Inactive account.' });
 
     // The approvers; if nobody is ticked, every active manager
     const managers = await admin.from('profiles').select('email, timeoff_approver').eq('role', 'manager').eq('active', true);
     if (managers.error) throw managers.error;
     const ticked = managers.data.filter((m) => m.timeoff_approver);
-    const to = [...new Set((ticked.length ? ticked : managers.data).map((m) => m.email).filter(Boolean))];
+    // Plus the supervisor(s) of their shift for vacation, sick and comp time used (they can approve those too)
+    let sups: { email: string | null }[] = [];
+    if (who.shift && ['vacation', 'sick', 'comp'].includes(r.type)) {
+      const s = await admin.from('profiles').select('email').eq('is_supervisor', true).eq('shift', who.shift).eq('active', true).neq('id', r.user_id);
+      if (s.error) throw s.error;
+      sups = s.data;
+    }
+    const to = [...new Set([...(ticked.length ? ticked : managers.data), ...sups].map((m) => m.email).filter(Boolean))];
     if (!to.length) return json({ sent: 0, note: 'No approvers.' });
 
     const name = who.full_name || who.email;
@@ -88,7 +96,7 @@ Deno.serve(async (req) => {
         ? `Hours: ${esc(r.hours_worked)} worked × 1.5 = <strong>${esc(r.hours)} comp hours</strong>`
         : `Hours: ${esc(r.hours ?? '—')}`,
       r.reason ? `${earned ? 'What for' : 'Reason'}: “${esc(r.reason)}”` : '',
-      'Approve or deny it on the Approvals tab.'
+      'Approve or deny it in the portal (Approvals, or Time Off for shift supervisors).'
     ], 'Review it');
 
     const res = await fetch('https://api.resend.com/emails', {
