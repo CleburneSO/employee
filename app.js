@@ -17,7 +17,9 @@
   const REPORT_TITLE = cfg.REPORT_TITLE || 'DAILY REPORT';
   // Which parts of the portal are on (FEATURES in config.js). Everything is on unless switched off,
   // e.g. the jail portal turns off case numbers, patrol stats and off-duty jobs.
-  const FEATURES = { cases: true, stats: true, offduty: true, comp: true, uniforms: true, ...(cfg.FEATURES || {}) };
+  const FEATURES = { cases: true, stats: true, offduty: true, comp: true, uniforms: true, info: false, ...(cfg.FEATURES || {}) };
+  // Shifts (A/B) and shift supervisors: on wherever patrol stats are, unless set on their own
+  if (FEATURES.shifts === undefined) FEATURES.shifts = FEATURES.stats !== false;
   const on = (f) => FEATURES[f] !== false;
   // Comp time: everyone (true), nobody (false), or only people ticked "Has comp time" on the People tab ('ticked')
   const compPerPerson = FEATURES.comp === 'ticked';
@@ -480,7 +482,7 @@
   const views = {};
 
   function renderShell() {
-    const tabs = [['calendar', 'Calendar'], ['timesheets', 'My Timesheets'], ['timeoff', hasComp(state.profile) ? 'Time Off & Comp' : 'Time Off']];
+    const tabs = [['calendar', 'Calendar'], ...(on('info') ? [['info', 'Info']] : []), ['timesheets', 'My Timesheets'], ['timeoff', hasComp(state.profile) ? 'Time Off & Comp' : 'Time Off']];
     if (on('uniforms')) tabs.push(['uniforms', 'Uniforms']);
     if (on('cases')) tabs.push(['cases', 'Case Numbers']);
     if (on('stats') && canSeeStats()) tabs.push(['stats', 'Stats']);
@@ -2586,6 +2588,184 @@
     };
   }
 
+  /* ---------------- info ---------------- */
+  // Reference info for everyone; managers keep it up to date. Each row's fields live in info_rows.data.
+  // field: [key, label, input type, required]
+  const INFO_SECTIONS = {
+    oncall: { one: 'on-call week', fields: [['name', 'Investigator', 'text', true], ['start', 'Starts', 'datetime-local', true],
+      ['end', 'Ends', 'datetime-local', true], ['notes', 'Notes', 'text']] },
+    court: { one: 'court date', fields: [['date', 'Date', 'date', true], ['time', 'Time', 'time'], ['court', 'Court / case', 'text', true],
+      ['where', 'Where', 'text'], ['notes', 'Notes', 'text']] },
+    bond: { one: 'bond', fields: [['charge', 'Charge', 'text', true], ['class', 'Class', 'text'], ['amount', 'Bond', 'text', true], ['notes', 'Notes', 'text']] },
+    bondsman: { one: 'bonding company', fields: [['name', 'Name', 'text', true], ['phone', 'Phone', 'tel'], ['notes', 'Notes', 'text']] },
+    doc: { one: 'form or document', fields: [['title', 'Title', 'text', true], ['url', 'Link', 'url', true], ['notes', 'Notes', 'text']] }
+  };
+  const infoWhen = (s) => s ? new Date(s).toLocaleString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const telLink = (p) => {
+    const digits = String(p || '').replace(/[^\d+]/g, '');
+    return digits ? `<a href="tel:${esc(digits)}">${esc(p)}</a>` : esc(p || '');
+  };
+  const safeUrl = (u) => /^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '';
+  const localDT = (d) => `${isoDate(d)}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+  views.info = async (el) => {
+    const [rowsR] = await Promise.all([
+      sb.from('info_rows').select('*'),
+      loadDirectory().catch(() => [])
+    ]);
+    if (rowsR.error) throw rowsR.error;
+    const rows = rowsR.data || [];
+    const by = (sec) => rows.filter((r) => r.section === sec);
+    const d = (r, k) => String(r.data?.[k] ?? '');
+    const byText = (k) => (a, b) => d(a, k).localeCompare(d(b, k), undefined, { numeric: true, sensitivity: 'base' });
+    const mgr = isManager();
+    const now = new Date(), today = isoDate(now);
+
+    const oncall = by('oncall').sort(byText('start'));
+    const onNow = oncall.find((r) => new Date(d(r, 'start')) <= now && now < new Date(d(r, 'end')));
+    const nextUp = oncall.find((r) => new Date(d(r, 'start')) > now);
+    const oncallUpcoming = oncall.filter((r) => new Date(d(r, 'end')) > now);
+    const oncallPast = oncall.filter((r) => new Date(d(r, 'end')) <= now).reverse().slice(0, 10);
+    const courtKey = (r) => `${d(r, 'date')}T${d(r, 'time') || '00:00'}`;
+    const court = by('court').sort((a, b) => courtKey(a).localeCompare(courtKey(b)));
+    const courtUpcoming = court.filter((r) => d(r, 'date') >= today);
+    const courtPast = court.filter((r) => d(r, 'date') < today).reverse().slice(0, 20);
+    const bonds = by('bond').sort(byText('charge')), bondsmen = by('bondsman').sort(byText('name'));
+    const docs = by('doc').sort(byText('title'));
+
+    const updated = (...secs) => {
+      const last = rows.filter((r) => secs.includes(r.section)).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];
+      if (!last) return '';
+      const who = last.updated_by ? dirName(last.updated_by) : '';
+      return `<p class="hint info-updated">Updated ${esc(fmtShort(isoDate(new Date(last.updated_at))))}${who && who !== 'Unknown' ? ` by ${esc(who)}` : ''}</p>`;
+    };
+    const addBtn = (sec, label) => mgr ? `<button type="button" class="btn small" data-info-add="${sec}">${label}</button>` : '';
+    const editCell = (r) => mgr ? `<td class="info-edit"><button type="button" class="btn-link" data-info-edit="${r.id}" aria-label="Edit">✎ Edit</button></td>` : '';
+    const editHead = mgr ? '<th></th>' : '';
+    const none = (cols, msg) => `<tr><td colspan="${cols + (mgr ? 1 : 0)}" class="hint">${msg}</td></tr>`;
+    const table = (heads, list, cells, empty, cls = '') => `<div class="table-wrap"><table class="list info-table ${cls}">
+      <thead><tr>${heads.map((h) => `<th>${h}</th>`).join('')}${editHead}</tr></thead>
+      <tbody>${list.length ? list.map((r) => `<tr data-info-row="${r.id}"${r === onNow ? ' class="info-now"' : ''}>${cells(r)}${editCell(r)}</tr>`).join('') : none(heads.length, empty)}</tbody>
+    </table></div>`;
+    const searchable = (r) => esc(Object.values(r.data || {}).join(' ').toLowerCase());
+
+    const oncallCells = (r) => `<td><strong>${esc(d(r, 'name'))}</strong>${r === onNow ? ' <span class="chip">On call now</span>' : ''}</td>
+      <td>${esc(infoWhen(d(r, 'start')))}</td><td>${esc(infoWhen(d(r, 'end')))}</td><td>${esc(d(r, 'notes'))}</td>`;
+    const courtCells = (r) => `<td>${d(r, 'date') ? `${esc(fmtDay(d(r, 'date')))} ${esc(fmtShort(d(r, 'date')))}` : ''}</td><td>${esc(clock(d(r, 'time')))}</td>
+      <td>${esc(d(r, 'court'))}</td><td>${esc(d(r, 'where'))}</td><td>${esc(d(r, 'notes'))}</td>`;
+
+    el.innerHTML = `
+      <nav class="info-jump" aria-label="Jump to">
+        <a href="#info-oncall">On call</a><a href="#info-court">Court</a><a href="#info-bonds">Bonds</a><a href="#info-docs">Forms</a>
+      </nav>
+      <section class="card info-now-card" id="info-oncall">
+        <div class="card-head"><h2>Investigator on call</h2>${addBtn('oncall', '+ Add week')}</div>
+        ${onNow ? `<div class="info-oncall-now">
+            <div><div class="info-oncall-name">${esc(d(onNow, 'name'))}</div>
+              <div class="hint" style="margin:0">On call until ${esc(infoWhen(d(onNow, 'end')))}${d(onNow, 'notes') ? ` · ${esc(d(onNow, 'notes'))}` : ''}</div></div>
+          </div>` : `<p class="info-oncall-none">No one is on the schedule right now.${mgr ? ' Add a week below.' : ''}</p>`}
+        ${nextUp ? `<p class="hint">Next: <strong>${esc(d(nextUp, 'name'))}</strong> from ${esc(infoWhen(d(nextUp, 'start')))}</p>` : ''}
+        <details class="fold" ${mgr ? 'open' : ''}><summary><h3>Schedule</h3></summary>
+          ${table(['Investigator', 'From', 'To', 'Notes'], oncallUpcoming, oncallCells, 'Nothing scheduled yet.')}
+          ${oncallPast.length ? `<details class="fold"><summary><h3>Past weeks</h3></summary>${table(['Investigator', 'From', 'To', 'Notes'], oncallPast, oncallCells, '')}</details>` : ''}
+        </details>
+        ${updated('oncall')}
+      </section>
+      <section class="card" id="info-court">
+        <div class="card-head"><h2>Court calendar</h2>${addBtn('court', '+ Add court date')}</div>
+        ${table(['Date', 'Time', 'Court / case', 'Where', 'Notes'], courtUpcoming, courtCells, 'No upcoming court dates.')}
+        ${courtPast.length ? `<details class="fold"><summary><h3>Past court dates</h3></summary>${table(['Date', 'Time', 'Court / case', 'Where', 'Notes'], courtPast, courtCells, '')}</details>` : ''}
+        ${updated('court')}
+      </section>
+      <section class="card" id="info-bonds">
+        <div class="card-head"><h2>Bond schedule</h2>${addBtn('bond', '+ Add charge')}</div>
+        <input type="search" class="info-search" data-for="info-bond-t" placeholder="Search charges" aria-label="Search charges">
+        <div id="info-bond-t">${table(['Charge', 'Class', 'Bond', 'Notes'], bonds, (r) => `<td><strong>${esc(d(r, 'charge'))}</strong></td><td>${esc(d(r, 'class'))}</td>
+          <td>${esc(d(r, 'amount'))}</td><td>${esc(d(r, 'notes'))}</td>`, 'No bonds listed yet.')}</div>
+        <div class="card-head info-sub"><h3>Bonding companies</h3>${addBtn('bondsman', '+ Add company')}</div>
+        ${table(['Name', 'Phone', 'Notes'], bondsmen, (r) => `<td><strong>${esc(d(r, 'name'))}</strong></td><td>${telLink(d(r, 'phone'))}</td><td>${esc(d(r, 'notes'))}</td>`, 'No bonding companies listed yet.')}
+        ${updated('bond', 'bondsman')}
+      </section>
+      <section class="card" id="info-docs">
+        <div class="card-head"><h2>Forms &amp; documents</h2>${addBtn('doc', '+ Add link')}</div>
+        ${table(['Form', 'Notes'], docs, (r) => {
+          const u = safeUrl(d(r, 'url'));
+          return `<td>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer"><strong>${esc(d(r, 'title'))}</strong> ↗</a>` : `<strong>${esc(d(r, 'title'))}</strong>`}</td><td>${esc(d(r, 'notes'))}</td>`;
+        }, 'No forms linked yet.')}
+        ${updated('doc')}
+      </section>`;
+
+    // Search boxes filter their table as you type
+    $$('.info-search', el).forEach((inp) => {
+      inp.oninput = () => {
+        const q = inp.value.trim().toLowerCase();
+        $$(`#${inp.dataset.for} tbody tr[data-info-row]`, el).forEach((tr) => {
+          const r = rows.find((x) => x.id === tr.dataset.infoRow);
+          tr.hidden = !!q && !searchable(r).includes(esc(q));
+        });
+      };
+    });
+    $$('.info-jump a', el).forEach((a) => {
+      a.onclick = (e) => { e.preventDefault(); $(a.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+    });
+    if (!mgr) return;
+    $$('[data-info-edit]', el).forEach((b) => { b.onclick = () => { const r = rows.find((x) => x.id === b.dataset.infoEdit); editInfo(r.section, r); }; });
+    $$('[data-info-add]', el).forEach((b) => {
+      b.onclick = () => {
+        const sec = b.dataset.infoAdd;
+        const prefill = {};
+        if (sec === 'oncall') {
+          // Start the next week where the last one ends (or now), same hour, 7 days long
+          const last = oncall[oncall.length - 1];
+          const start = last && new Date(d(last, 'end')) > now ? new Date(d(last, 'end')) : new Date(today + 'T08:00');
+          prefill.start = localDT(start); prefill.end = localDT(addDays(start, 7));
+        }
+        if (sec === 'court') prefill.date = today;
+        editInfo(sec, { data: prefill });
+      };
+    });
+  };
+
+  function editInfo(sec, r) {
+    const spec = INFO_SECTIONS[sec];
+    const v = (k) => esc(r.data?.[k] ?? '');
+    const people = Object.values(state.dir).filter((p) => p.full_name).sort((a, b) => a.full_name.localeCompare(b.full_name));
+    openModal(`
+      <h2>${r.id ? 'Edit' : 'Add'} ${esc(spec.one)}</h2>
+      <form id="info-form" autocomplete="off">
+        ${spec.fields.map(([k, label, type, req]) => `<label>${esc(label)}${req ? '' : ' <span class="hint">(optional)</span>'}
+          <input name="${k}" type="${type}" ${req ? 'required' : ''} maxlength="${type === 'url' ? 1000 : 300}" value="${v(k)}"
+            ${sec === 'oncall' && k === 'name' ? 'list="info-people"' : ''} ${type === 'url' ? 'placeholder="https://…"' : ''}></label>`).join('')}
+        ${sec === 'oncall' ? `<datalist id="info-people">${people.map((p) => `<option value="${esc(p.full_name)}">`).join('')}</datalist>` : ''}
+        <div class="actions">
+          <button class="btn primary" type="submit">Save</button>
+          ${r.id ? '<button class="btn danger" type="button" id="info-del">Delete</button>' : ''}
+        </div>
+      </form>`);
+    const f = $('#info-form');
+    f.onsubmit = (ev) => {
+      ev.preventDefault();
+      withBusy(f.querySelector('button[type=submit]'), async () => {
+        const data = {};
+        spec.fields.forEach(([k]) => { const x = f[k].value.trim(); if (x) data[k] = x; });
+        if (sec === 'oncall' && new Date(data.end) <= new Date(data.start)) throw new Error('The end has to be after the start.');
+        if (sec === 'doc' && !safeUrl(data.url)) throw new Error('The link has to start with https://');
+        const q = r.id ? sb.from('info_rows').update({ data }).eq('id', r.id) : sb.from('info_rows').insert({ section: sec, data });
+        const res = await q;
+        if (res.error) throw res.error;
+        closeModal(); toast('Saved.'); showView('info');
+      });
+    };
+    if (r.id) $('#info-del').onclick = (e) => {
+      if (!confirm(`Delete this ${spec.one}?`)) return;
+      withBusy(e.target, async () => {
+        const res = await sb.from('info_rows').delete().eq('id', r.id);
+        if (res.error) throw res.error;
+        closeModal(); toast('Deleted.'); showView('info');
+      });
+    };
+  }
+
   /* ---------------- off-duty jobs ---------------- */
   const REQ_LABEL = { requested: 'Requested', approved: 'Approved', declined: 'Declined', withdrawn: 'Withdrawn' };
   views.offduty = async (el) => {
@@ -3213,12 +3393,12 @@
     ['case_counters', 'Case number setting'], ['offduty_jobs', 'Off-duty job'], ['offduty_requests', 'Off-duty request'],
     ['events', 'Calendar event'], ['event_people', 'Calendar tag'], ['announcements', 'Announcement'],
     ['profiles', 'Person'], ['duties', 'Special duty'], ['profile_duties', 'Duty assignment'], ['patrol_stats', 'Patrol stats'],
-    ['comp_adjustments', 'Comp adjustment']
+    ['comp_adjustments', 'Comp adjustment'], ['info_rows', 'Info page']
   ];
   const AUDIT_PER_PAGE = 50;
   const areaLabel = (t) => (AUDIT_AREAS.find(([k]) => k === t) || [t, t])[1];
   const FIELD_LABELS = {
-    status: 'Status', manager_note: 'Manager note', full_name: 'Name', role: 'Role', active: 'Active',
+    status: 'Status', manager_note: 'Manager note', data: 'Details', full_name: 'Name', role: 'Role', active: 'Active',
     entries: 'Time entries', total_hours: 'Hours worked', total_paid_hours: 'Hours to be paid', vacation_hours: 'Vacation',
     holiday_hours: 'Holiday', sick_hours: 'Sick', duty_hours: 'Special-duty hours', signed_name: 'Signed name',
     victim_defendant: 'Victim/Defendant', charge: 'Charge', kind: 'Type', case_date: 'Date', initials: 'INTS',
@@ -3278,7 +3458,7 @@
     ['profiles', 'id'], ['duties', 'id'], ['profile_duties', 'user_id,duty_id'], ['events', 'id'], ['event_people', 'event_id,user_id'],
     ['announcements', 'id'], ['case_counters', 'year'], ['case_numbers', 'id'], ['comp_adjustments', 'id'], ['offduty_jobs', 'id'],
     ['offduty_requests', 'id'], ['patrol_stats', 'id'], ['time_off_requests', 'id'], ['timesheets', 'id'],
-    ['uniform_orders', 'id'], ['uniform_adjustments', 'id'], ['audit_log', 'id']
+    ['uniform_orders', 'id'], ['uniform_adjustments', 'id'], ['info_rows', 'id'], ['audit_log', 'id']
   ];
   const sqlVal = (v) => v === null || v === undefined ? 'null'
     : typeof v === 'boolean' ? String(v)
@@ -3466,8 +3646,8 @@
     const chips = [
       p.role === 'manager' ? 'Manager' : 'Employee',
       p.timeoff_approver ? 'Approves time off' : '',
-      on('stats') && p.patrol ? `Patrol${p.shift ? ' · ' + p.shift + ' Shift' : ''}` : '',
-      on('stats') && p.is_supervisor ? 'Supervisor' : '',
+      on('stats') && p.patrol ? `Patrol${p.shift ? ' · ' + p.shift + ' Shift' : ''}` : on('shifts') && p.shift ? `${p.shift} Shift` : '',
+      on('shifts') && p.is_supervisor ? 'Supervisor' : '',
       on('stats') && p.reports_to ? `Reports to ${personName(p.reports_to)}` : '',
       p.hours_cap ? `Capped at ${hrs(p.hours_cap)} hrs` : '',
       p.no_timesheet ? 'No timesheets here' : '',
@@ -3644,15 +3824,15 @@
           <label class="check"><input type="checkbox" name="timeoff_approver" ${p.timeoff_approver ? 'checked' : ''} ${canSetApprovers() ? '' : 'disabled'}> <span><strong>Approves time off</strong> — gets an email for every time-off request and every off-duty job request. When anyone is ticked, only they can approve or deny time off (e.g. the sheriff and chief deputy). Managers only.${canSetApprovers() ? '' : ' <em>Only the sheriff or chief deputy can change this.</em>'}</span></label>
         </fieldset>` : ''}
 
-        <fieldset class="person-set" ${on('stats') ? '' : 'hidden'}>
-          <legend>Patrol stats</legend>
-          <label class="check"><input type="checkbox" name="patrol" ${p.patrol ? 'checked' : ''}> <span><strong>Patrol</strong> — logs stats and shows up in them</span></label>
+        <fieldset class="person-set" ${on('shifts') || on('stats') ? '' : 'hidden'}>
+          <legend>${on('stats') ? 'Shift, supervisor & patrol stats' : 'Shift & supervisor'}</legend>
+          <label class="check" ${on('stats') ? '' : 'hidden'}><input type="checkbox" name="patrol" ${p.patrol ? 'checked' : ''}> <span><strong>Patrol</strong> — logs stats and shows up in them</span></label>
           <div class="row">
             <label>Shift<select name="shift"><option value="">No shift</option>${SHIFTS.map((x) => `<option value="${x}" ${p.shift === x ? 'selected' : ''}>${x} Shift</option>`).join('')}</select></label>
-            <label>Supervisor<select name="reports_to"><option value="">No supervisor</option>${supervisors.filter((x) => x.id !== p.id).map((x) =>
+            <label ${on('stats') ? '' : 'hidden'}>Reports to<select name="reports_to"><option value="">No supervisor</option>${supervisors.filter((x) => x.id !== p.id).map((x) =>
               `<option value="${x.id}" ${p.reports_to === x.id ? 'selected' : ''}>${esc(x.full_name || x.email)}</option>`).join('')}</select></label>
           </div>
-          <label class="check"><input type="checkbox" name="is_supervisor" ${p.is_supervisor ? 'checked' : ''}> <span><strong>Supervisor</strong> — sees the stats of deputies who report to them</span></label>
+          <label class="check"><input type="checkbox" name="is_supervisor" ${p.is_supervisor ? 'checked' : ''}> <span><strong>Supervisor</strong> — approves vacation, sick and comp time used for their shift${on('stats') ? ', and sees the stats of deputies who report to them' : ''}</span></label>
         </fieldset>
 
         <div class="actions">
@@ -3773,10 +3953,10 @@
     const tf = state.teamFilter || (state.teamFilter = { q: '', show: '' });
     const comp = Object.fromEntries(cBals.map((b) => [b.user_id, b]));
     const uni = Object.fromEntries(uBals.map((b) => [b.user_id, b]));
-    const showComp = on('comp') && (!compPerPerson || people.some((p) => p.comp_time)), showUni = on('uniforms'), showShift = on('stats');
+    const showComp = on('comp') && (!compPerPerson || people.some((p) => p.comp_time)), showUni = on('uniforms'), showShift = on('shifts');
 
     const chips = (p) => [
-      on('stats') && p.is_supervisor ? '<span class="chip muted-chip">Supervisor</span>' : '',
+      on('shifts') && p.is_supervisor ? '<span class="chip muted-chip">Supervisor</span>' : '',
       ...active.filter((d) => !d.everyone && has.has(`${p.id}|${d.id}`)).map((d) => `<span class="chip">${esc(d.name)}</span>`),
       p.hours_cap ? `<span class="chip muted-chip">${hrs(p.hours_cap)}-hr cap</span>` : '',
       p.no_timesheet ? '<span class="chip muted-chip">No timesheets</span>' : ''
@@ -3792,8 +3972,8 @@
       if (tf.show === 'nosup') return p.patrol && !p.reports_to;
       return true;
     };
-    const SHOW = on('stats') ? [['', 'Everyone'], ['A', 'A Shift'], ['B', 'B Shift'], ['patrol', 'Patrol'], ['nonpatrol', 'Not patrol'], ['supervisor', 'Supervisors'],
-                  ['manager', 'Managers'], ['nosup', 'Patrol with no supervisor']] : [['', 'Everyone'], ['manager', 'Managers']];
+    const SHOW = [['', 'Everyone'], ...(on('shifts') ? [['A', 'A Shift'], ['B', 'B Shift'], ['supervisor', 'Supervisors']] : []),
+      ...(on('stats') ? [['patrol', 'Patrol'], ['nonpatrol', 'Not patrol'], ['nosup', 'Patrol with no supervisor']] : []), ['manager', 'Managers']];
     const compCell = (p) => (!compPerPerson || p.comp_time) && comp[p.id] ? hrs(comp[p.id].balance) : '—';
 
     el.innerHTML = `

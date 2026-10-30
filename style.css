@@ -1037,3 +1037,25 @@ table.entry td.note-cell { display: none; }
   .tile-n { font-size: 1.6rem; }
   .tile-t { font-size: .98rem; }
 }
+
+/* ---------------- info tab ---------------- */
+.info-jump { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .9rem; }
+.info-jump a { padding: .3rem .8rem; border: 1px solid var(--line); border-radius: 99px; background: var(--card); color: var(--primary); font-weight: 600; font-size: .9rem; text-decoration: none; }
+.info-jump a:hover { border-color: var(--primary); }
+#info-oncall, #info-court, #info-bonds, #info-docs { scroll-margin-top: 1rem; }
+.info-oncall-now { display: flex; align-items: center; justify-content: space-between; gap: .75rem 1rem; flex-wrap: wrap;
+  padding: .85rem 1rem; border-radius: var(--radius); background: #e9eee2; margin-bottom: .5rem; }
+.info-oncall-name { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
+.info-oncall-none { margin: 0 0 .5rem; color: var(--muted); }
+.info-table tr.info-now td { background: #f1f5ea; }
+.info-table td.info-edit { text-align: right; white-space: nowrap; width: 1%; }
+.info-search { width: 100%; max-width: 360px; margin: 0 0 .6rem; }
+.info-sub { margin: 1.1rem 0 .5rem; }
+.info-sub h3 { margin: 0; font-size: 1rem; }
+.info-updated { margin: .6rem 0 0; font-size: .8rem; }
+:root[data-theme="dark"] .info-oncall-now { background: #263022; }
+:root[data-theme="dark"] .info-table tr.info-now td { background: #222a1d; }
+@media (max-width: 760px) {
+  .info-table td.info-edit { width: auto; }
+  .info-table td:empty { display: none; }
+}

@@ -78,6 +78,13 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 - **My events**: anyone can tap **Add my event** (or tap a day → **Add my event this day**) for a personal event: dentist, day off, kid's game, out at training. **Who can see this**: **Only me** (the default), **Everyone**, or **Pick people**. Shared events show on the others' calendars as "[Name]'s event"; only the owner can change or delete them, and they never send email. The database enforces who sees them (managers don't see private ones either).
 - **Paid holidays**: add an event with type **Paid holiday** (hours default to 8). It shows on everyone's calendar, and when anyone opens a timesheet for that pay period, **Total Holiday Hours** and that day's explanation are filled in automatically (editable before signing). Timesheets already submitted aren't changed.
 
+**Info (everyone; Sheriff's Office)**
+- One page of reference info: **Investigator on call** (who's on call right now, until when, and who's next, plus the schedule), the **Court calendar** (upcoming dates; past ones folded away), the **Bond schedule** (searchable) with **Bonding companies**, and **Forms & documents** (links that open in a new tab — e.g. a shared Google Drive or county website file). Each section shows when it was last updated and by whom.
+- Every manager can add, edit or delete rows (**+ Add week**, **✎ Edit**). A new on-call week starts where the last one ends and runs 7 days. Changes are in the audit log. Stored in the `info_rows` table.
+
+**Patrol stats (turned off)**
+- The Stats tab is turned off in `config.js` (`FEATURES: { stats: false, ... }`). All of its code and data are still there; change `stats` to `true` and upload the site to bring it back. Shifts (A/B) and shift supervisors stay on either way (`shifts: true`), since supervisors approve their shift's time off.
+
 **Off-Duty Jobs (everyone)**
 - Managers post jobs (when, where, pay, number of spots, details).
 - Deputies **request** a job (with an optional note). Managers **approve** or **decline**. A job can't be over-filled. Everyone sees who's approved. Deputies can withdraw, and a manager can undo an approval.

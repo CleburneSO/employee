@@ -22,7 +22,7 @@ window.APP_CONFIG = {
 
   // The jail uses the calendar, timesheets and time off; these are off.
   // Comp time only for people ticked "Has comp time" on the Team tab (e.g. the jail administrator).
-  FEATURES: { cases: false, stats: false, offduty: false, comp: 'ticked', uniforms: false },
+  FEATURES: { cases: false, stats: false, offduty: false, comp: 'ticked', uniforms: false, info: false },
 
   // Shown to managers in the Admin menu
   OTHER_PORTAL: { label: "Sheriff's Office portal", url: '../' }

@@ -22,5 +22,9 @@ window.APP_CONFIG = {
   PAY_PERIOD_DAYS: 14,
 
   // Shown to managers in the Admin menu
-  OTHER_PORTAL: { label: 'Jail portal', url: 'jail/' }
+  OTHER_PORTAL: { label: 'Jail portal', url: 'jail/' },
+
+  // Turn parts of the portal on or off. Patrol stats are off for now — the code is
+  // still there; change stats to true to bring the Stats tab back.
+  FEATURES: { stats: false, shifts: true, info: true }
 };

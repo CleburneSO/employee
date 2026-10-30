@@ -1342,7 +1342,8 @@ begin
     coalesce((r ->> 'user_id')::uuid, (r ->> 'reserved_by')::uuid,
              case when tg_table_name = 'profiles' then (r ->> 'id')::uuid end),
     coalesce(r ->> 'case_number', r ->> 'title', r ->> 'period_start', r ->> 'shift_date', r ->> 'full_name',
-             r ->> 'name', r ->> 'start_date', (r ->> 'year') || ' counter'),
+             r ->> 'name', r ->> 'start_date', (r ->> 'year') || ' counter',
+             r -> 'data' ->> 'name', r -> 'data' ->> 'charge', r -> 'data' ->> 'court', r -> 'data' ->> 'title'),
     diff
   );
   return null;
@@ -1936,6 +1937,51 @@ drop policy if exists uniform_adjustments_select on public.uniform_adjustments;
 create policy uniform_adjustments_select on public.uniform_adjustments as PERMISSIVE for SELECT to authenticated using ((((user_id = auth.uid()) AND is_active()) OR is_manager()));
 drop policy if exists uniform_adjustments_insert on public.uniform_adjustments;
 create policy uniform_adjustments_insert on public.uniform_adjustments as PERMISSIVE for INSERT to authenticated with check (is_manager());
+
+-- ---------------------------------------------------------------- info tab
+-- Reference info everyone can read: on-call investigator schedule, court dates, bond schedule,
+-- bonding companies and links to forms. Managers keep it up to date.
+create table if not exists public.info_rows (
+  id uuid not null default gen_random_uuid(),
+  section text not null,
+  data jsonb not null default '{}'::jsonb,
+  sort integer not null default 0,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  updated_by uuid,
+  constraint info_rows_pkey PRIMARY KEY (id),
+  constraint info_rows_section_check CHECK ((section = ANY (ARRAY['oncall'::text, 'court'::text, 'bond'::text, 'bondsman'::text, 'phone'::text, 'doc'::text]))),
+  constraint info_rows_data_check CHECK ((jsonb_typeof(data) = 'object'::text)),
+  constraint info_rows_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES profiles(id) ON DELETE SET NULL
+);
+alter table public.info_rows enable row level security;
+grant select, insert, update, delete on public.info_rows to authenticated;
+create index if not exists info_rows_section_idx ON public.info_rows USING btree (section, sort);
+
+CREATE OR REPLACE FUNCTION public.info_rows_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  new.updated_at := now();
+  if auth.uid() is not null then new.updated_by := auth.uid(); end if;
+  if tg_op = 'UPDATE' then new.created_at := old.created_at; end if;
+  return new;
+end;
+$function$;
+revoke execute on function public.info_rows_guard() from public, anon, authenticated;
+
+drop trigger if exists info_rows_guard on public.info_rows;
+CREATE TRIGGER info_rows_guard BEFORE INSERT OR UPDATE ON public.info_rows FOR EACH ROW EXECUTE FUNCTION public.info_rows_guard();
+drop trigger if exists audit_info_rows on public.info_rows;
+CREATE TRIGGER audit_info_rows AFTER INSERT OR DELETE OR UPDATE ON public.info_rows FOR EACH ROW EXECUTE FUNCTION public.audit_trigger();
+
+drop policy if exists info_rows_select on public.info_rows;
+create policy info_rows_select on public.info_rows as PERMISSIVE for SELECT to authenticated using (is_active());
+drop policy if exists info_rows_manage on public.info_rows;
+create policy info_rows_manage on public.info_rows as PERMISSIVE for ALL to authenticated using (is_manager()) with check (is_manager());
 
 -- ---------------------------------------------------------------- existing logins
 -- Make sure every login has a profile (handle_new_user does this for new ones)
