@@ -1819,15 +1819,16 @@
     const missing = due.map((p) => {
       const status = Object.fromEntries(dueTs.data.filter((t) => t.period_start === p).map((t) => [t.user_id, t.status]));
       const joinedBy = (x) => !x.created_at || isoDate(new Date(x.created_at)) <= periodEnd(p);   // not people who started after it
-      const list = people.filter((x) => x.active !== false && !x.no_timesheet && joinedBy(x) && !['submitted', 'approved'].includes(status[x.id]))
-        .map((x) => ({ ...x, sentBack: status[x.id] === 'rejected', toSign: status[x.id] === 'needs_signature' }));
+      // (a timesheet a manager fixed that only needs the employee's signature isn't listed as missing)
+      const list = people.filter((x) => x.active !== false && !x.no_timesheet && joinedBy(x) && !['submitted', 'approved', 'needs_signature'].includes(status[x.id]))
+        .map((x) => ({ ...x, sentBack: status[x.id] === 'rejected' }));
       return { p, list };
     }).filter((g) => g.list.length);
     const missingCount = missing.reduce((n, g) => n + g.list.length, 0);
     el.innerHTML = `
       ${missingCount ? `<section class="card"><h2>Haven’t submitted a timesheet <span class="count">${missingCount}</span></h2>
         ${missing.map(({ p, list }) => `<h3 class="due-period">${esc(periodLabel(p))} <span class="muted">${periodEnd(p) === today ? 'due today' : `was due ${esc(fmtShort(periodEnd(p)))}`}</span></h3>
-          <div class="due-people">${list.map((x) => `<span class="chip ${x.sentBack ? '' : 'muted-chip'}" title="${x.sentBack ? 'Sent back, not resubmitted yet' : 'Not submitted'}">${esc(x.full_name || x.email)}${x.sentBack ? ' (sent back)' : x.toSign ? ' (needs their signature)' : ''}</span>`).join(' ')}</div>`).join('')}
+          <div class="due-people">${list.map((x) => `<span class="chip ${x.sentBack ? '' : 'muted-chip'}" title="${x.sentBack ? 'Sent back, not resubmitted yet' : 'Not submitted'}">${esc(x.full_name || x.email)}${x.sentBack ? ' (sent back)' : ''}</span>`).join(' ')}</div>`).join('')}
         
       </section>` : ''}
       <section class="card"><h2>Timesheets awaiting approval <span class="count">${ts.data.length}</span></h2>
@@ -1846,7 +1847,8 @@
 
   /* ---------------- manager: payroll & history ---------------- */
   views.payroll = async (el) => {
-    await loadPeople();
+    await Promise.all([loadPeople(), loadDuties()]);
+    const dutyNames = [...new Set(state.duties.map((d) => d.name).concat(LEGACY_HOURS.map(([, name]) => name)))].sort();
     const [tsDone, toDone, bals, uBals, uOpen, uDone] = await Promise.all([
       sb.from('timesheets').select('*').neq('status', 'submitted').order('period_start', { ascending: false }).limit(25),
       sb.from('time_off_requests').select('*').neq('status', 'pending').order('start_date', { ascending: false }).limit(25),
@@ -1898,6 +1900,7 @@
         <form id="exp" class="row end">
           <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
           <label>Include<select id="exp-status"><option value="approved">Approved only</option><option value="all">All statuses</option></select></label>
+          <label>Special duty<select id="exp-duty"><option value="">All timesheets</option>${dutyNames.map((n) => `<option value="${esc(n)}">Only ${esc(n)}</option>`).join('')}</select></label>
           <label>CSV layout<select id="exp-layout"><option value="summary">One row per person</option><option value="daily">One row per day</option></select></label>
         </form>
         <div class="actions">
@@ -1930,18 +1933,21 @@
       if ($('#exp-status').value === 'approved') q = q.eq('status', 'approved');
       const { data, error } = await q;
       if (error) throw error;
-      if (!data.length) throw new Error(`No ${$('#exp-status').value === 'approved' ? 'approved ' : ''}timesheets for ${periodLabel(p)}.`);
-      data.sort((a, b) => personName(a.user_id).localeCompare(personName(b.user_id)));
-      return { p, data };
+      // Only the timesheets with hours on the chosen special duty (e.g. Traffic OT)
+      const duty = $('#exp-duty').value;
+      const rows = duty ? data.filter((t) => dutyLines(t).some((d) => d.name === duty && d.hours > 0)) : data;
+      if (!rows.length) throw new Error(`No ${$('#exp-status').value === 'approved' ? 'approved ' : ''}timesheets${duty ? ` with ${duty} hours` : ''} for ${periodLabel(p)}.`);
+      rows.sort((a, b) => personName(a.user_id).localeCompare(personName(b.user_id)));
+      return { p, data: rows, duty };
     }
 
     $('#exp').onsubmit = (e) => e.preventDefault();
     $('#exp-print').onclick = (e) => withBusy(e.target, async () => {
-      const { p, data } = await fetchPeriod();
-      openManySheets(data, `Pay period ${periodLabel(p)}`);
+      const { p, data, duty } = await fetchPeriod();
+      openManySheets(data, `Pay period ${periodLabel(p)}${duty ? ` — ${duty}` : ''}`);
     });
     $('#exp-csv').onclick = (e) => withBusy(e.target, async () => {
-      const { p, data } = await fetchPeriod();
+      const { p, data, duty } = await fetchPeriod();
       const extraHeads = EXTRA_HOURS.map(([, label]) => label.replace(/^Total /, ''));
       const extraVals = (t) => EXTRA_HOURS.map(([k]) => Number(t[k] || 0));
       let rows;
@@ -1965,7 +1971,7 @@
           }
         }
       }
-      downloadCSV(`timesheets_${p}_to_${periodEnd(p)}.csv`, rows);
+      downloadCSV(`timesheets_${p}_to_${periodEnd(p)}${duty ? '_' + duty.replace(/[^\w]+/g, '-') : ''}.csv`, rows);
     });
   };
 
