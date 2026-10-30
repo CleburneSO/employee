@@ -1002,3 +1002,38 @@ table.entry td.note-cell { display: none; }
 .pf-sec-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem; }
 .pf-sec-head h2 { margin: 0; }
 .pf-sec-head + div { margin-top: .75rem; }
+
+/* ---------------- admin: links row, home tiles, settings, people rows ---------------- */
+.adm-nav { display: flex; gap: .15rem; width: calc(100% - 2rem); max-width: calc(1000px - 2rem); margin: 1rem auto 0; padding: 0; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.adm-nav[hidden] { display: none; }
+.adm-nav button { background: none; border: 0; border-bottom: 3px solid transparent; margin-bottom: -1px; padding: .6rem .85rem; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.adm-nav button:hover { color: var(--text); }
+.adm-nav button.on { color: var(--primary); border-bottom-color: var(--primary); }
+.tile-head { margin: .4rem 0 .6rem; font-size: .85rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.tile-head + .tiles { margin-bottom: 1.4rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: .9rem; }
+.tile { display: flex; flex-direction: column; gap: .3rem; text-align: left; font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.1rem; min-height: 125px; cursor: pointer; }
+.tile.small { min-height: 0; }
+.tile:hover { border-color: var(--primary); }
+.tile.alert { border-left: 4px solid var(--gold, #e5a34c); }
+.tile-t { font-weight: 700; font-size: 1.05rem; }
+.tile-n { font-size: 2rem; font-weight: 800; line-height: 1; color: var(--primary); font-variant-numeric: tabular-nums; }
+.tile-n.warn { color: #b07a12; }
+.tile-s { color: var(--muted); font-size: .86rem; }
+.tile-go { margin-top: auto; padding-top: .3rem; color: var(--primary); font-weight: 600; font-size: .9rem; }
+.set-list { display: grid; gap: .6rem; }
+.set-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem 1rem; padding: .85rem 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.set-row .x { flex: 1 1 260px; }
+.set-row .x > div:first-child { font-weight: 700; }
+.set-row .hint { margin: .1rem 0 0; }
+.set-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.team-tools { margin-bottom: .6rem; }
+.team-list tr.click-row { cursor: pointer; }
+.team-list tr.click-row:hover td { background: rgba(65, 81, 44, .06); }
+.team-list .tm-name .chip { margin-left: .2rem; }
+@media (max-width: 760px) {
+  .tiles { grid-template-columns: 1fr 1fr; gap: .6rem; }
+  .tile { min-height: 0; padding: .8rem; }
+  .tile-n { font-size: 1.6rem; }
+  .tile-t { font-size: .98rem; }
+}

@@ -485,13 +485,11 @@
     if (on('cases')) tabs.push(['cases', 'Case Numbers']);
     if (on('stats') && canSeeStats()) tabs.push(['stats', 'Stats']);
     if (on('offduty')) tabs.push(['offduty', 'Off-Duty Jobs']);
-    // Manager pages sit under one "Admin" drop-down
-    const admin = [];
-    if (isManager()) admin.push(['review', 'Approvals'], ['payroll', 'Payroll & History'], ['team', 'People']);
-    if (isOwner()) admin.push(['audit', 'Audit Log']);
-    state.adminViews = admin.map(([k]) => k);
-    if (![...tabs, ...admin].some(([k]) => k === state.view) && !(['person', 'tsfor'].includes(state.view) && isManager())) state.view = 'calendar';
-    const tabBtn = ([k, l]) => `<button type="button" data-view="${k}" data-label="${esc(l)}">${esc(l)}${k === 'review' ? ' <span class="count tab-count" hidden></span>' : ''}</button>`;
+    // Manager pages: one "Admin" tab that opens the Admin home; a row of links at the top of every admin page
+    if (isManager()) tabs.push(['adminhome', 'Admin']);
+    state.adminViews = isManager() ? ['adminhome', 'review', 'payroll', 'team', 'uniadmin', 'settings', 'person', 'tsfor', ...(isOwner() ? ['audit'] : [])] : [];
+    if (!tabs.some(([k]) => k === state.view) && !state.adminViews.includes(state.view)) state.view = 'calendar';
+    const tabBtn = ([k, l]) => `<button type="button" data-view="${k}" data-label="${esc(l)}">${esc(l)}${k === 'adminhome' ? ' <span class="count tab-count" hidden></span>' : ''}</button>`;
 
     app.innerHTML = `
       <header class="topbar">
@@ -507,14 +505,10 @@
         <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="main-nav">
           <span class="menu-icon" aria-hidden="true">☰</span><span class="menu-current"></span><span class="menu-caret" aria-hidden="true">▾</span>
         </button>
-        <nav class="tabs" id="main-nav">${tabs.map(tabBtn).join('')}
-          ${admin.length ? `<div class="tab-group">
-            <button type="button" class="tab-group-toggle" aria-expanded="false" aria-haspopup="true">Admin <span class="count tab-count" hidden></span> <span class="tab-caret" aria-hidden="true">▾</span></button>
-            <div class="tab-group-label">Admin</div>
-            <div class="tab-drop">${admin.map(tabBtn).join('')}${cfg.OTHER_PORTAL?.url ? `<a class="tab-link" href="${esc(cfg.OTHER_PORTAL.url)}">${esc(cfg.OTHER_PORTAL.label || 'Other portal')} ↗</a>` : ''}</div>
-          </div>` : ''}</nav>
+        <nav class="tabs" id="main-nav">${tabs.map(tabBtn).join('')}</nav>
       </div>
       <div id="due" class="due-wrap"></div>
+      <nav id="adm-nav" class="adm-nav" hidden aria-label="Admin pages"></nav>
       <main id="view"></main>`;
     $('#signout').onclick = () => sb.auth.signOut();
     bindThemeToggle();
@@ -590,15 +584,29 @@
     $$('[data-due]', box).forEach((b) => { b.onclick = () => { state.tsPeriod = b.dataset.due; showView('timesheets'); }; });
   }
 
+  // The row of admin links (Home · Approvals · Payroll · People · Uniforms · Settings)
+  function renderAdminNav(v) {
+    const nav = $('#adm-nav');
+    if (!nav) return;
+    nav.hidden = !v;
+    if (!v) { nav.innerHTML = ''; return; }
+    const here = v === 'person' || v === 'tsfor' ? 'team' : v === 'audit' ? 'settings' : v;
+    const links = [['adminhome', 'Home'], ['review', 'Approvals'], ['payroll', 'Payroll'], ['team', 'People'],
+      ...(on('uniforms') ? [['uniadmin', 'Uniforms']] : []), ['settings', 'Settings']];
+    nav.innerHTML = links.map(([k, l]) => `<button type="button" data-view="${k}" class="${k === here ? 'on' : ''}">${esc(l)}${k === 'review' ? ' <span class="count tab-count" hidden></span>' : ''}</button>`).join('');
+    $$('button', nav).forEach((b) => { b.onclick = () => { showView(b.dataset.view); window.scrollTo(0, 0); }; });
+  }
+
   async function showView(v) {
     state.flushDraft?.();
     state.view = v;
     refreshDue();
-    const tab = v === 'person' || v === 'tsfor' ? 'team' : v;   // a profile (and filling out someone's timesheet) belongs to People
+    const isAdmin = (state.adminViews || []).includes(v);
+    const tab = isAdmin ? 'adminhome' : v;
     $$('.tabs button[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === tab));
-    $('.tab-group-toggle')?.classList.toggle('active', (state.adminViews || []).includes(tab));
     const cur = $('.menu-current');
     if (cur) cur.textContent = $('.tabs button[data-view].active')?.dataset.label || '';
+    renderAdminNav(isAdmin ? v : null);
     refreshAdminCount();
     const el = $('#view');
     el.innerHTML = '<div class="loading">Loading…</div>';
@@ -1823,18 +1831,48 @@
   }
 
   /* ---------------- manager: approvals (only what's waiting) ---------------- */
-  views.review = async (el) => {
+  /* ---------------- manager: Admin home (what needs attention, and where everything is) ---------------- */
+  views.adminhome = async (el) => {
     const people = await loadPeople();
-    // Who still owes a timesheet: last pay period (once it's over), and the current one on its last day
+    const approver = canApproveTimeOff();
+    const count = (q) => q.then((r) => { if (r.error) throw r.error; return r.count || 0; });
+    const [nTs, nTo, nUo, nPlace, toSign, { missing, missingCount }] = await Promise.all([
+      count(sb.from('timesheets').select('id', { count: 'exact', head: true }).eq('status', 'submitted')),
+      approver ? count(sb.from('time_off_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending')) : 0,
+      approver && on('uniforms') ? count(sb.from('uniform_orders').select('id', { count: 'exact', head: true }).eq('status', 'pending')) : 0,
+      on('uniforms') ? count(sb.from('uniform_orders').select('id', { count: 'exact', head: true }).eq('status', 'approved').is('ordered_at', null)) : 0,
+      sb.from('timesheets').select('user_id, period_start').eq('status', 'needs_signature').then((r) => { if (r.error) throw r.error; return r.data; }),
+      missingTimesheets(people)
+    ]);
+    const nApprove = nTs + nTo + nUo;
+    const parts = [nTs && `${nTs} timesheet${nTs > 1 ? 's' : ''}`, nTo && `${nTo} time off`, nUo && `${nUo} uniform order${nUo > 1 ? 's' : ''}`].filter(Boolean);
+    const names = (list) => list.slice(0, 3).map((x) => (x.full_name || personName(x.user_id) || '').split(' ')[0]).join(', ') + (list.length > 3 ? ` +${list.length - 3}` : '');
+    const tile = (view, title, n, sub, go, opts = {}) => `<button type="button" class="tile${n && opts.alert ? ' alert' : ''}${opts.big ? '' : ' small'}" data-go="${view}"${opts.scroll ? ` data-scroll="${opts.scroll}"` : ''}>
+      <span class="tile-t">${title}</span>${n !== null ? `<span class="tile-n${n && opts.alert ? ' warn' : ''}">${n}</span>` : ''}<span class="tile-s">${sub}</span><span class="tile-go">${go} →</span></button>`;
+    el.innerHTML = `
+      <h2 class="tile-head">Needs your attention</h2>
+      <div class="tiles">
+        ${tile('review', 'Approvals', nApprove, nApprove ? parts.join(' · ') : 'Nothing waiting', 'Review', { alert: true, big: true })}
+        ${tile('review', 'Haven’t submitted', missingCount, missingCount ? `${esc(names(missing.flatMap((g) => g.list)))} · ${esc(periodLabel(missing[0].p))}` : 'Everyone’s in', 'See who', { alert: true, big: true, scroll: 'missing' })}
+        ${on('uniforms') ? tile('uniadmin', 'Uniform orders to place', nPlace, nPlace ? 'Approved, not ordered from Galls yet' : 'Nothing to order', 'Open', { big: true }) : ''}
+        ${tile('payroll', 'Waiting on a signature', toSign.length, toSign.length ? `Fixed timesheets: ${esc(names(toSign))}` : 'None', 'See', { big: true })}
+      </div>
+      <h2 class="tile-head">Go to</h2>
+      <div class="tiles">
+        ${tile('payroll', 'Payroll', null, 'Print or export a pay period (or one special duty), past timesheets and time off', 'Open')}
+        ${tile('team', 'People', null, 'Everyone with their balances; click a name for their profile, settings and records', 'Open')}
+        ${on('uniforms') ? tile('uniadmin', 'Uniforms', null, 'Orders to place or receive, recent orders, allowances', 'Open') : ''}
+        ${tile('settings', 'Settings', null, `Invite someone, special duties${isOwner() ? ', backups, audit log' : ''}`, 'Open')}
+      </div>`;
+    $$('[data-go]', el).forEach((b) => { b.onclick = () => { state.scrollTo = b.dataset.scroll || null; showView(b.dataset.go); window.scrollTo(0, 0); }; });
+  };
+
+  // Who still owes a timesheet: last pay period (once it's over), and the current one on its last day
+  async function missingTimesheets(people) {
     const cur = currentPeriod(), prev = previousPeriod(), today = isoDate(new Date());
     const due = [...(prev !== cur ? [prev] : []), ...(periodEnd(cur) === today ? [cur] : [])];
-    const [ts, to, dueTs, uo] = await Promise.all([
-      sb.from('timesheets').select('*').eq('status', 'submitted').order('period_start'),
-      sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date'),
-      due.length ? sb.from('timesheets').select('user_id, period_start, status').in('period_start', due) : { data: [] },
-      on('uniforms') ? sb.from('uniform_orders').select('*').eq('status', 'pending').order('created_at') : { data: [] }
-    ]);
-    for (const r of [ts, to, dueTs, uo]) if (r.error) throw r.error;
+    const dueTs = due.length ? await sb.from('timesheets').select('user_id, period_start, status').in('period_start', due) : { data: [] };
+    if (dueTs.error) throw dueTs.error;
     const missing = due.map((p) => {
       const status = Object.fromEntries(dueTs.data.filter((t) => t.period_start === p).map((t) => [t.user_id, t.status]));
       const joinedBy = (x) => !x.created_at || isoDate(new Date(x.created_at)) <= periodEnd(p);   // not people who started after it
@@ -1843,9 +1881,20 @@
         .map((x) => ({ ...x, sentBack: status[x.id] === 'rejected' }));
       return { p, list };
     }).filter((g) => g.list.length);
-    const missingCount = missing.reduce((n, g) => n + g.list.length, 0);
+    return { missing, missingCount: missing.reduce((n, g) => n + g.list.length, 0), today };
+  }
+
+  views.review = async (el) => {
+    const people = await loadPeople();
+    const [ts, to, uo, { missing, missingCount, today }] = await Promise.all([
+      sb.from('timesheets').select('*').eq('status', 'submitted').order('period_start'),
+      sb.from('time_off_requests').select('*').eq('status', 'pending').order('start_date'),
+      on('uniforms') ? sb.from('uniform_orders').select('*').eq('status', 'pending').order('created_at') : { data: [] },
+      missingTimesheets(people)
+    ]);
+    for (const r of [ts, to, uo]) if (r.error) throw r.error;
     el.innerHTML = `
-      ${missingCount ? `<section class="card"><h2>Haven’t submitted a timesheet <span class="count">${missingCount}</span></h2>
+      ${missingCount ? `<section class="card" id="missing"><h2>Haven’t submitted a timesheet <span class="count">${missingCount}</span></h2>
         ${missing.map(({ p, list }) => `<h3 class="due-period">${esc(periodLabel(p))} <span class="muted">${periodEnd(p) === today ? 'due today' : `was due ${esc(fmtShort(periodEnd(p)))}`}</span></h3>
           <div class="due-people">${list.map((x) => `<span class="chip ${x.sentBack ? '' : 'muted-chip'}" title="${x.sentBack ? 'Sent back, not resubmitted yet' : 'Not submitted'}">${esc(x.full_name || x.email)}${x.sentBack ? ' (sent back)' : ''}</span>`).join(' ')}</div>`).join('')}
         
@@ -1856,52 +1905,34 @@
         ${timeOffApprovers().length ? `<p class="hint">Approved or denied by ${esc(approverNames())}.</p>` : ''}
         <div id="to-pending">${to.data.length ? timeOffTable(to.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>
       ${on('uniforms') ? `<section class="card"><h2>Uniform orders awaiting approval <span class="count">${uo.data.length}</span></h2>
-        <div id="uo-pending">${uo.data.length ? uniformTable(uo.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>` : ''}
-      <p class="hint">Approved and denied history, comp time${on('uniforms') ? ' and uniform allowance' : ''} balances and payroll are on <button class="btn-link" type="button" id="go-payroll">Payroll &amp; History</button>.</p>`;
+        <div id="uo-pending">${uo.data.length ? uniformTable(uo.data, true) : '<p class="muted">Nothing waiting.</p>'}</div></section>` : ''}`;
     bindTimesheetButtons($('#ts-pending'), ts.data);
     bindTimeOffButtons($('#to-pending'), to.data);
     if ($('#uo-pending')) bindUniformButtons($('#uo-pending'), uo.data);
-    $('#go-payroll').onclick = () => showView('payroll');
+    if (state.scrollTo) { $(`#${state.scrollTo}`)?.scrollIntoView(); state.scrollTo = null; }
   };
 
-  /* ---------------- manager: payroll & history ---------------- */
-  views.payroll = async (el) => {
-    await Promise.all([loadPeople(), loadDuties()]);
-    const dutyNames = [...new Set(state.duties.map((d) => d.name).concat(LEGACY_HOURS.map(([, name]) => name)))].sort();
-    const [tsDone, toDone, bals, uBals, uOpen, uDone] = await Promise.all([
-      sb.from('timesheets').select('*').neq('status', 'submitted').order('period_start', { ascending: false }).limit(25),
-      sb.from('time_off_requests').select('*').neq('status', 'pending').order('start_date', { ascending: false }).limit(25),
-      compBalances(),
-      on('uniforms') ? uniformBalances() : [],
+  /* ---------------- manager: uniforms (orders to place, allowances) ---------------- */
+  views.uniadmin = async (el) => {
+    await loadPeople();
+    const [uBals, uOpen, uDone] = await Promise.all([
+      uniformBalances(),
       // approved orders still to place with Galls or still to arrive
-      on('uniforms') ? sb.from('uniform_orders').select('*').eq('status', 'approved').is('received_at', null).order('reviewed_at') : { data: [] },
-      on('uniforms') ? sb.from('uniform_orders').select('*').neq('status', 'pending').order('created_at', { ascending: false }).limit(25) : { data: [] }
+      sb.from('uniform_orders').select('*').eq('status', 'approved').is('received_at', null).order('reviewed_at'),
+      sb.from('uniform_orders').select('*').neq('status', 'pending').order('created_at', { ascending: false }).limit(25)
     ]);
-    for (const r of [tsDone, toDone, uOpen, uDone]) if (r.error) throw r.error;
+    for (const r of [uOpen, uDone]) if (r.error) throw r.error;
     const uRows = uBals.filter((b) => b.active !== false);
-    const compRows = bals.filter((b) => b.active !== false && (!compPerPerson || state.people[b.user_id]?.comp_time));
-    // Names open the person's profile, where their history and the Adjust buttons are
     const nameBtn = (id, name) => `<button type="button" class="btn-link name-link" data-person="${esc(id)}">${esc(name || personName(id))}</button>`;
-
     el.innerHTML = `
-      <p class="hint">To see everything for one person (or adjust a balance), open them on <button class="btn-link" type="button" id="go-people">People</button>.</p>
-      ${on('comp') && (!compPerPerson || compRows.length) ? `<section class="card">
+      <section class="card"><h2>Approved orders to place or receive <span class="count${uOpen.data.length ? '' : ' muted-count'}">${uOpen.data.length}</span></h2>
+        <div id="uo-open">${uOpen.data.length ? uniformTable(uOpen.data, true) : '<p class="muted">Nothing to place or receive.</p>'}</div>
+        <p class="hint">Requests waiting for approval are on Approvals. To enter an order for someone, use their profile (Enter an order).</p></section>
+      <section class="card"><h2>Recent orders</h2><div id="uo-done">${uniformTable(uDone.data, true)}</div></section>
+      <section class="card">
         <details class="fold">
-          <summary><h2>Comp time balances</h2></summary>
-          <div class="table-wrap"><table class="list">
-            <thead><tr><th>Name</th><th class="num">Balance</th><th class="num">Pending earned</th><th class="num">Pending used</th></tr></thead>
-            <tbody>${compRows.map((b) => `<tr><td>${nameBtn(b.user_id, b.full_name)}</td>
-              <td class="num"><strong>${hrs(b.balance)}</strong></td>
-              <td class="num">${Number(b.pending_earned) ? '+' + hrs(b.pending_earned) : '—'}</td>
-              <td class="num">${Number(b.pending_used) ? '−' + hrs(b.pending_used) : '—'}</td></tr>`).join('')}</tbody>
-          </table></div>
-          <button class="btn small" id="comp-csv" type="button">Download CSV</button>
-        </details>
-      </section>` : ''}
-      ${on('uniforms') ? `<section class="card">
-        <details class="fold">
-          <summary><h2>Uniform allowance</h2></summary>
-          <p class="muted">${esc(fyLabel(uBals[0]?.fy_start))}. Everyone gets ${money(uBals[0]?.allowance ?? 500)}, reset every October 1.</p>
+          <summary><h2>Allowances</h2></summary>
+          <p class="muted">${esc(fyLabel(uBals[0]?.fy_start))}. Everyone gets ${money(uBals[0]?.allowance ?? 500)}, reset every October 1. Click a name to adjust it on their profile.</p>
           <div class="table-wrap"><table class="list">
             <thead><tr><th>Name</th><th class="num">Left</th><th class="num">Spent</th><th class="num">Waiting</th><th class="num">Adjusted</th></tr></thead>
             <tbody>${uRows.map((b) => `<tr><td>${nameBtn(b.user_id, b.full_name)}</td>
@@ -1910,12 +1941,27 @@
           </table></div>
           <button class="btn small" id="uo-csv" type="button">Download CSV</button>
         </details>
-        <h3 style="margin-top:1rem">Approved orders to place or receive</h3>
-        <div id="uo-open">${uniformTable(uOpen.data, true)}</div>
-        <details class="fold"><summary><h3>Recent uniform orders</h3></summary>
-          <div id="uo-done">${uniformTable(uDone.data, true)}</div></details>
-      </section>` : ''}
-      <section class="card"><h2>Payroll: print or export a pay period</h2>
+      </section>`;
+    bindUniformButtons($('#uo-open'), uOpen.data);
+    bindUniformButtons($('#uo-done'), uDone.data);
+    $('#uo-csv').onclick = () => downloadCSV(`uniform-allowance-${localToday()}.csv`, [
+      ['Name', 'Allowance year starts', 'Allowance', 'Adjusted', 'Spent (approved)', 'Waiting for approval', 'Left'],
+      ...uRows.map((b) => [b.full_name, b.fy_start, Number(b.allowance), Number(b.adjusted), Number(b.spent), Number(b.pending), Number(b.balance)])
+    ]);
+  };
+
+  /* ---------------- manager: payroll ---------------- */
+  views.payroll = async (el) => {
+    await Promise.all([loadPeople(), loadDuties()]);
+    const dutyNames = [...new Set(state.duties.map((d) => d.name).concat(LEGACY_HOURS.map(([, name]) => name)))].sort();
+    const [tsDone, toDone] = await Promise.all([
+      sb.from('timesheets').select('*').neq('status', 'submitted').order('period_start', { ascending: false }).limit(25),
+      sb.from('time_off_requests').select('*').neq('status', 'pending').order('start_date', { ascending: false }).limit(25)
+    ]);
+    for (const r of [tsDone, toDone]) if (r.error) throw r.error;
+
+    el.innerHTML = `
+      <section class="card"><h2>Print or export a pay period</h2>
         <form id="exp" class="row end">
           <label>Pay period${periodSelect('exp-period', previousPeriod())}</label>
           <label>Include<select id="exp-status"><option value="approved">Approved only</option><option value="all">All statuses</option></select></label>
@@ -1926,25 +1972,12 @@
           <button class="btn primary" id="exp-print">Print all timesheets</button>
           <button class="btn" id="exp-csv">Download CSV</button>
         </div></section>
-      <section class="card"><h2>Recent timesheets</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div></section>
+      <section class="card"><h2>Recent timesheets</h2><div id="ts-done">${timesheetTable(tsDone.data, true)}</div>
+        <p class="hint">Everything for one person is on their profile under People.</p></section>
       <section class="card"><h2>Recent time off</h2><div id="to-done">${timeOffTable(toDone.data, true)}</div></section>`;
 
-    $('#go-people').onclick = () => showView('team');
     bindTimesheetButtons($('#ts-done'), tsDone.data);
     bindTimeOffButtons($('#to-done'), toDone.data);
-
-    if (on('uniforms')) {
-      bindUniformButtons($('#uo-open'), uOpen.data);
-      bindUniformButtons($('#uo-done'), uDone.data);
-      $('#uo-csv').onclick = () => downloadCSV(`uniform-allowance-${localToday()}.csv`, [
-        ['Name', 'Allowance year starts', 'Allowance', 'Adjusted', 'Spent (approved)', 'Waiting for approval', 'Left'],
-        ...uRows.map((b) => [b.full_name, b.fy_start, Number(b.allowance), Number(b.adjusted), Number(b.spent), Number(b.pending), Number(b.balance)])
-      ]);
-    }
-    if ($('#comp-csv')) $('#comp-csv').onclick = () => downloadCSV(`comp-balances-${localToday()}.csv`, [
-      ['Name', 'Balance', 'Earned (approved)', 'Used (approved)', 'Adjustments', 'Pending earned', 'Pending used'],
-      ...compRows.map((b) => [b.full_name, Number(b.balance), Number(b.earned), Number(b.used), Number(b.adjusted), Number(b.pending_earned), Number(b.pending_used)])
-    ]);
 
     async function fetchPeriod() {
       const p = $('#exp-period').value;
@@ -3333,16 +3366,6 @@
 
     el.innerHTML = `
       <section class="card">
-        <h2>Database setup</h2>
-        <p class="muted">Download every table, function and security rule as one SQL file, as a backup or to share for review. It contains no records.</p>
-        <button class="btn" type="button" id="db-export">Download database setup</button>
-      </section>
-      <section class="card">
-        <h2>All records</h2>
-        <p class="muted">Every person, timesheet, time-off and comp request, uniform order, case number, calendar event, off-duty job, stat and audit entry, as one restore file. Save one to a county drive every month. With schema.sql it rebuilds the portal in a new Supabase project; people then reset their passwords once.</p>
-        <button class="btn primary" type="button" id="rec-export">Download all records</button>
-      </section>
-      <section class="card">
         <h2>Audit log</h2>
         <p class="muted">Every change made in the portal, recorded by the database. Entries can’t be edited or deleted.</p>
         <form id="audit-f" class="row end audit-filters">
@@ -3380,22 +3403,6 @@
     };
     ['actor', 'subject', 'area'].forEach((n) => { form[n].onchange = () => form.requestSubmit(); });
     if ($('#audit-clear')) $('#audit-clear').onclick = () => { Object.assign(f, { actor: '', subject: '', area: '', from: '', to: '', page: 0 }); showView('audit'); };
-    $('#rec-export').onclick = (e) => {
-      const b = e.currentTarget, label = b.textContent;
-      b.disabled = true;
-      downloadRecordsBackup(b).then((counts) => toast(`Downloaded: ${counts.length} tables.`))
-        .catch((err) => toast(err.message || String(err), true))
-        .finally(() => { b.disabled = false; b.textContent = label; });
-    };
-    $('#db-export').onclick = (e) => withBusy(e.currentTarget, async () => {
-      const { data: sql, error: err } = await sb.rpc('export_db_setup');
-      if (err) throw err;
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([sql], { type: 'text/plain' }));
-      a.download = `database-setup-${new Date().toISOString().slice(0, 10)}.sql`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    });
     $('#au-prev').onclick = () => { f.page--; showView('audit'); };
     $('#au-next').onclick = () => { f.page++; showView('audit'); };
     $$('[data-audit]', el).forEach((b) => {
@@ -3727,25 +3734,57 @@
     });
   }
 
+  // Invite someone (People and Settings): they get an email to set their password
+  function openInvite() {
+    openModal(`
+      <h2 class="modal-head">Invite someone</h2>
+      <form id="invite-form" autocomplete="off">
+        <label>Full name<input name="full_name" required placeholder="e.g. John Doe"></label>
+        <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
+        <label>Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
+        <p class="hint">They’ll get an email to set their password. Then open their profile on People to set duties, shift and settings.</p>
+        <div class="actions"><button class="btn primary" type="submit">Send invite</button><button class="btn" type="button" id="invite-cancel">Cancel</button></div>
+      </form>`);
+    $('#invite-cancel').onclick = closeModal;
+    $('#invite-form').onsubmit = (e) => {
+      e.preventDefault();
+      const f = e.target;
+      withBusy(f.querySelector('[type=submit]'), async () => {
+        const { data, error } = await sb.functions.invoke('invite-user', {
+          body: { email: f.email.value, full_name: f.full_name.value, role: f.role.value,
+                  redirect_to: location.origin + location.pathname }
+        });
+        if (error) throw new Error(await functionError(error, 'invite-user'));
+        if (data?.error) throw new Error(data.error);
+        closeModal();
+        toast(`Invite sent to ${f.email.value}.`);
+        showView(state.view);
+      });
+    };
+  }
+
   views.team = async (el) => {
-    const [people, duties, assigns] = await Promise.all([loadPeople(), loadDuties(), loadAssignments()]);
+    const [people, duties, assigns, cBals, uBals] = await Promise.all([loadPeople(), loadDuties(), loadAssignments(),
+      on('comp') ? compBalances() : [], on('uniforms') ? uniformBalances() : []]);
     const has = new Set(assigns.map((a) => `${a.user_id}|${a.duty_id}`));
     const active = duties.filter((d) => d.active);
     const current = people.filter((p) => p.active !== false);
     const former = people.filter((p) => p.active === false);
-    const supervisors = current.filter((p) => p.is_supervisor);
     const tf = state.teamFilter || (state.teamFilter = { q: '', show: '' });
-    const nameOf = (id) => state.people[id]?.full_name || state.people[id]?.email || '';
+    const comp = Object.fromEntries(cBals.map((b) => [b.user_id, b]));
+    const uni = Object.fromEntries(uBals.map((b) => [b.user_id, b]));
+    const showComp = on('comp') && (!compPerPerson || people.some((p) => p.comp_time)), showUni = on('uniforms'), showShift = on('stats');
 
-    const dutyChipsFor = (p) => active.filter((d) => !d.everyone && has.has(`${p.id}|${d.id}`))
-      .map((d) => `<span class="chip">${esc(d.name)}</span>`).join(' ');
-    const patrolText = (p) => p.patrol
-      ? `<span>${p.shift ? esc(p.shift) + ' Shift' : '<span class="error-text">No shift</span>'}${p.reports_to ? ` · <span class="muted">${esc(nameOf(p.reports_to))}</span>` : ''}</span>`
-      : '<span class="muted">—</span>';
-    const roleText = (p) => `<span>${p.role === 'manager' ? 'Manager' : 'Employee'}${on('stats') && p.is_supervisor ? ' <span class="chip muted-chip">Supervisor</span>' : ''}</span>`;
+    const chips = (p) => [
+      on('stats') && p.is_supervisor ? '<span class="chip muted-chip">Supervisor</span>' : '',
+      ...active.filter((d) => !d.everyone && has.has(`${p.id}|${d.id}`)).map((d) => `<span class="chip">${esc(d.name)}</span>`),
+      p.hours_cap ? `<span class="chip muted-chip">${hrs(p.hours_cap)}-hr cap</span>` : '',
+      p.no_timesheet ? '<span class="chip muted-chip">No timesheets</span>' : ''
+    ].filter(Boolean).join(' ');
     const matches = (p) => {
       const q = tf.q.trim().toLowerCase();
       if (q && !`${p.full_name} ${p.email}`.toLowerCase().includes(q)) return false;
+      if (tf.show === 'A' || tf.show === 'B') return p.shift === tf.show;
       if (tf.show === 'patrol') return !!p.patrol;
       if (tf.show === 'nonpatrol') return !p.patrol;
       if (tf.show === 'supervisor') return !!p.is_supervisor;
@@ -3753,72 +3792,46 @@
       if (tf.show === 'nosup') return p.patrol && !p.reports_to;
       return true;
     };
-    const SHOW = on('stats') ? [['', 'Everyone'], ['patrol', 'Patrol'], ['nonpatrol', 'Not patrol'], ['supervisor', 'Supervisors'],
+    const SHOW = on('stats') ? [['', 'Everyone'], ['A', 'A Shift'], ['B', 'B Shift'], ['patrol', 'Patrol'], ['nonpatrol', 'Not patrol'], ['supervisor', 'Supervisors'],
                   ['manager', 'Managers'], ['nosup', 'Patrol with no supervisor']] : [['', 'Everyone'], ['manager', 'Managers']];
+    const compCell = (p) => (!compPerPerson || p.comp_time) && comp[p.id] ? hrs(comp[p.id].balance) : '—';
 
     el.innerHTML = `
       <section class="card">
-        <details class="fold">
-          <summary><h2>Invite someone</h2></summary>
-          <form id="invite-form" class="row end" autocomplete="off">
-            <label>Full name<input name="full_name" required placeholder="e.g. John Doe"></label>
-            <label>Email<input type="email" name="email" required placeholder="name@example.com"></label>
-            <label class="narrow-role">Role<select name="role"><option value="employee">Employee</option><option value="manager">Manager</option></select></label>
-            <button class="btn primary" type="submit">Send invite</button>
-          </form>
-          <p class="hint">They’ll get an email to set their password. Then click <strong>Edit</strong> next to their name to set duties, patrol and shift.</p>
-        </details>
-      </section>
-
-      <section class="card">
-        <h2>People <span class="count muted-count">${current.length}</span></h2>
-        <p class="hint">Click a name to see everything for that person: timesheets, time off, comp time${on('uniforms') ? ', uniforms' : ''}${on('offduty') ? ', off-duty jobs' : ''}.</p>
-        <div class="filter-bar team-filter">
-          <label>Find<input id="tm-q" type="search" placeholder="Name or email" value="${esc(tf.q)}"></label>
+        <div class="row end team-tools">
+          <label class="grow">Find<input id="tm-q" type="search" placeholder="Name or email" value="${esc(tf.q)}"></label>
           <label>Show<select id="tm-show">${SHOW.map(([k, l]) => `<option value="${k}" ${tf.show === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <button class="btn" type="button" id="tm-invite">+ Invite someone</button>
         </div>
         <div class="table-wrap"><table class="list team-list">
-          <thead><tr><th>Name</th><th>Role</th>${on('stats') ? '<th>Patrol</th>' : ''}<th>Special duties</th><th></th></tr></thead>
-          <tbody>${current.map((p) => `<tr data-id="${p.id}">
-            <td><div class="tm-name"><button type="button" class="btn-link name-link" data-person="${p.id}">${esc(p.full_name || '(no name)')}</button></div><div class="tm-email">${esc(p.email)}</div></td>
-            <td>${roleText(p)}</td>
-            ${on('stats') ? `<td>${patrolText(p)}</td>` : ''}
-            <td class="tm-duties">${dutyChipsFor(p) || '<span class="muted">—</span>'}</td>
-            <td class="right"><button class="btn small" data-person="${p.id}">Profile</button> <button class="btn small p-edit">Edit</button></td>
+          <thead><tr><th>Name <span class="count muted-count">${current.length}</span></th><th>Role</th>${showShift ? '<th>Shift</th>' : ''}${showComp ? '<th class="num">Comp hrs</th>' : ''}${showUni ? '<th class="num">Uniform left</th>' : ''}</tr></thead>
+          <tbody>${current.map((p) => `<tr data-id="${p.id}" class="click-row">
+            <td><div class="tm-name"><button type="button" class="btn-link name-link" data-person="${p.id}">${esc(p.full_name || '(no name)')}</button> ${chips(p)}</div><div class="tm-email">${esc(p.email)}</div></td>
+            <td>${p.role === 'manager' ? 'Manager' : 'Employee'}</td>
+            ${showShift ? `<td>${esc(p.shift || '—')}</td>` : ''}
+            ${showComp ? `<td class="num">${compCell(p)}</td>` : ''}
+            ${showUni ? `<td class="num">${uni[p.id] ? money(uni[p.id].balance) : '—'}</td>` : ''}
           </tr>`).join('')}</tbody>
         </table></div>
         <p class="muted hint" id="tm-none" hidden>No one matches.</p>
-        <p class="hint">When someone leaves, open <strong>Edit</strong> and click <strong>Deactivate</strong> (don’t delete them in Supabase — that would lose their records).</p>
+        <p class="hint">Click anyone to open their profile: settings (Edit), balances (Adjust) and all their records.
+          ${showComp || showUni ? `Download balances: ${showComp ? '<button class="btn-link" type="button" id="comp-csv">Comp time</button>' : ''}${showComp && showUni ? ' · ' : ''}${showUni ? '<button class="btn-link" type="button" id="uo-csv">Uniforms</button>' : ''}.` : ''}</p>
       </section>
 
       ${former.length ? `<section class="card">
         <details class="fold">
           <summary><h2>Deactivated <span class="count muted-count">${former.length}</span></h2></summary>
-          <p class="muted">These people can’t sign in to see or submit anything. Their records are kept — click a name to see them.</p>
+          <p class="muted">These people can’t sign in. Their records are kept — click a name to see them.</p>
           <div class="table-wrap"><table class="list">
             <thead><tr><th>Name</th><th>Email</th><th>Deactivated</th><th></th></tr></thead>
             <tbody>${former.map((p) => `<tr data-id="${p.id}">
               <td><button type="button" class="btn-link name-link" data-person="${p.id}">${esc(p.full_name || '(no name)')}</button></td><td class="muted">${esc(p.email)}</td>
               <td>${esc(fmtDateTime(p.deactivated_at))}</td>
-              <td class="right"><button class="btn small p-reactivate" data-name="${esc(p.full_name || p.email)}">Reactivate</button></td>
+              <td class="right"><button class="btn small p-reactivate">Reactivate</button></td>
             </tr>`).join('')}</tbody>
           </table></div>
         </details>
-      </section>` : ''}
-
-      <section class="card">
-        <details class="fold">
-          <summary><h2>Special duties setup</h2></summary>
-          <p class="muted">Grant and automatic overtime lines such as K9, DEA or Supervisor. <strong>Timesheet line</strong> and <strong>Note</strong> print on the timesheet. <strong>Auto hours</strong> are filled in for the person each pay period (they can change them). <strong>Everyone</strong> shows the line on every timesheet. Untick <strong>Paid</strong> for lines that print but aren’t added to Total Hours To Be Paid (like Comp Time Earned). Turn off <strong>Active</strong> to retire a duty — past timesheets keep it. Give people a duty with <strong>Edit</strong> next to their name.</p>
-          <div class="table-wrap"><table class="list duties">
-            <thead><tr><th>Short name</th><th>Timesheet line</th><th>Note</th><th>Auto hours</th><th>Everyone</th><th>Paid</th><th>Active</th><th></th></tr></thead>
-            <tbody>
-              ${duties.map((d) => dutyRow(d)).join('')}
-              ${dutyRow({ id: '', name: '', label: '', note: '', default_hours: 0, everyone: false, paid: true, active: true })}
-            </tbody>
-          </table></div>
-        </details>
-      </section>`;
+      </section>` : ''}`;
 
     // Search / filter without reloading
     const applyFilter = () => {
@@ -3833,25 +3846,64 @@
     $('#tm-q').oninput = (e) => { tf.q = e.target.value; applyFilter(); };
     $('#tm-show').onchange = (e) => { tf.show = e.target.value; applyFilter(); };
     applyFilter();
-
-    $('#invite-form').onsubmit = (e) => {
-      e.preventDefault();
-      const f = e.target;
-      withBusy(f.querySelector('button'), async () => {
-        const { data, error } = await sb.functions.invoke('invite-user', {
-          body: { email: f.email.value, full_name: f.full_name.value, role: f.role.value,
-                  redirect_to: location.origin + location.pathname }
-        });
-        if (error) throw new Error(await functionError(error, 'invite-user'));
-        if (data?.error) throw new Error(data.error);
-        toast(`Invite sent to ${f.email.value}.`);
-        showView('team');
-      });
-    };
-
-    $$('.p-edit', el).forEach((b) => { b.onclick = () => editPerson(state.people[b.closest('tr').dataset.id]); });
+    $('#tm-invite').onclick = openInvite;
+    // the whole row opens the profile
+    $$('.team-list tr.click-row', el).forEach((tr) => { tr.onclick = (e) => { if (!e.target.closest('button, a')) openProfile(tr.dataset.id); }; });
     $$('.p-reactivate', el).forEach((b) => { b.onclick = () => setActive(b, state.people[b.closest('tr').dataset.id], true); });
+    $('#comp-csv')?.addEventListener('click', () => downloadCSV(`comp-balances-${localToday()}.csv`, [
+      ['Name', 'Balance', 'Earned (approved)', 'Used (approved)', 'Adjustments', 'Pending earned', 'Pending used'],
+      ...cBals.filter((b) => b.active !== false && (!compPerPerson || state.people[b.user_id]?.comp_time))
+        .map((b) => [b.full_name, Number(b.balance), Number(b.earned), Number(b.used), Number(b.adjusted), Number(b.pending_earned), Number(b.pending_used)])
+    ]));
+    $('#uo-csv')?.addEventListener('click', () => downloadCSV(`uniform-allowance-${localToday()}.csv`, [
+      ['Name', 'Allowance year starts', 'Allowance', 'Adjusted', 'Spent (approved)', 'Waiting for approval', 'Left'],
+      ...uBals.filter((b) => b.active !== false).map((b) => [b.full_name, b.fy_start, Number(b.allowance), Number(b.adjusted), Number(b.spent), Number(b.pending), Number(b.balance)])
+    ]));
+  };
 
+  /* ---------------- manager: settings (set up once or rarely) ---------------- */
+  views.settings = async (el) => {
+    const duties = await loadDuties();
+    el.innerHTML = `
+      <div class="set-list">
+        <div class="set-row"><div class="x"><div>Invite someone</div><div class="hint">Send a new employee their sign-up email.</div></div><button class="btn" type="button" id="st-invite">Invite</button></div>
+        ${isOwner() ? `<div class="set-row"><div class="x"><div>Backups</div><div class="hint">Every record as one restore file (save one to a county drive monthly), and the database setup.</div></div>
+          <div class="set-actions"><button class="btn primary" type="button" id="rec-export">Download all records</button><button class="btn" type="button" id="db-export">Download database setup</button></div></div>
+        <div class="set-row"><div class="x"><div>Audit log</div><div class="hint">Every change: who, when, before → after. Only you can see it.</div></div><button class="btn" type="button" id="st-audit">Open</button></div>` : ''}
+        ${cfg.OTHER_PORTAL?.url ? `<div class="set-row"><div class="x"><div>${esc(cfg.OTHER_PORTAL.label || 'Other portal')}</div><div class="hint">Opens the other portal.</div></div><a class="btn" href="${esc(cfg.OTHER_PORTAL.url)}">Open ↗</a></div>` : ''}
+      </div>
+      <section class="card" style="margin-top:1rem">
+        <details class="fold" ${state.teamOpenDuties ? 'open' : ''}>
+          <summary><h2>Special duties</h2></summary>
+          <p class="muted">Grant and automatic overtime lines such as K9, DEA or Supervisor. <strong>Timesheet line</strong> and <strong>Note</strong> print on the timesheet. <strong>Auto hours</strong> are filled in for the person each pay period (they can change them). <strong>Everyone</strong> shows the line on every timesheet. Untick <strong>Paid</strong> for lines that print but aren’t added to Total Hours To Be Paid (like Comp Time Earned). Turn off <strong>Active</strong> to retire a duty — past timesheets keep it. Give people a duty on their profile (Edit).</p>
+          <div class="table-wrap"><table class="list duties">
+            <thead><tr><th>Short name</th><th>Timesheet line</th><th>Note</th><th>Auto hours</th><th>Everyone</th><th>Paid</th><th>Active</th><th></th></tr></thead>
+            <tbody>
+              ${duties.map((d) => dutyRow(d)).join('')}
+              ${dutyRow({ id: '', name: '', label: '', note: '', default_hours: 0, everyone: false, paid: true, active: true })}
+            </tbody>
+          </table></div>
+        </details>
+      </section>`;
+    state.teamOpenDuties = false;
+    $('#st-invite').onclick = openInvite;
+    $('#st-audit')?.addEventListener('click', () => showView('audit'));
+    $('#rec-export')?.addEventListener('click', (e) => {
+      const b = e.currentTarget, label = b.textContent;
+      b.disabled = true;
+      downloadRecordsBackup(b).then((counts) => toast(`Downloaded: ${counts.length} tables.`))
+        .catch((err) => toast(err.message || String(err), true))
+        .finally(() => { b.disabled = false; b.textContent = label; });
+    });
+    $('#db-export')?.addEventListener('click', (e) => withBusy(e.currentTarget, async () => {
+      const { data: sql, error: err } = await sb.rpc('export_db_setup');
+      if (err) throw err;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([sql], { type: 'text/plain' }));
+      a.download = `database-setup-${new Date().toISOString().slice(0, 10)}.sql`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }));
     $$('.d-save', el).forEach((b) => {
       b.onclick = () => {
         const tr = b.closest('tr');
@@ -3874,11 +3926,10 @@
           if (res.error) throw res.error.code === '23505' ? new Error('There’s already a duty with that short name.') : res.error;
           toast(tr.dataset.id ? 'Duty saved.' : 'Duty added.');
           state.teamOpenDuties = true;
-          showView('team');
+          showView('settings');
         });
       };
     });
-    if (state.teamOpenDuties) { const d = $$('details.fold', el).pop(); if (d) d.open = true; state.teamOpenDuties = false; }
   };
 
   function dutyRow(d) {
