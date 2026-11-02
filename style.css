@@ -1105,3 +1105,14 @@ main + .site-foot { margin-top: -1.5rem; }
 :root[data-theme="dark"] .cf-btn.on { color: #121418; }
 .court-find-out { margin-top: .7rem; font-size: 1.02rem; }
 .court-find-out .hint { margin: 0; }
+/* Info: bond schedule */
+.bond-rules { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem 1rem; margin-bottom: .75rem; font-size: .92rem; }
+.bond-rules ul { margin: 0; padding-left: 1.1rem; }
+.bond-rules li { margin: .3rem 0; }
+.bond-rules > .btn { margin: .3rem 0 .2rem; }
+.bond-table tr.info-group td { background: var(--bg); font-weight: 700; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding-top: .55rem; }
+.nobond { color: var(--danger); font-weight: 700; white-space: nowrap; }
+@media (max-width: 760px) {
+  .bond-table tr.info-group { border: 0; background: none; box-shadow: none; padding: 0; margin: 1rem 0 .35rem; }
+  .bond-table tr.info-group td { background: none; padding: 0; display: block; }
+}

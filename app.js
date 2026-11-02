@@ -2632,12 +2632,16 @@
     felony: { section: 'court', kind: 'felony', one: 'felony court setting', fields: [['from', 'Arrested from', 'date', true], ['to', 'Arrested through', 'date', true],
       ['date', 'Court date', 'date', true], ['time', 'Time', 'time'], ['notes', 'Notes', 'text']] },
     misd: { section: 'court', kind: 'misd', one: 'misdemeanor court date', fields: [['date', 'Court date', 'date', true], ['time', 'Time', 'time'], ['notes', 'Notes', 'text']] },
-    bond: { one: 'bond', fields: [['charge', 'Charge', 'text', true], ['class', 'Class', 'text'], ['amount', 'Bond', 'text', true], ['notes', 'Notes', 'text']] },
+    // Bond schedule (section 'bond'): charges grouped by category, in the order set by `sort`, plus rules shown above it
+    bond: { one: 'charge', fields: [['category', 'Group', 'text'], ['charge', 'Charge', 'text', true], ['class', 'Class', 'text'], ['amount', 'Bond', 'text', true],
+      ['notes', 'Conditions', 'text']] },
+    bondrule: { section: 'bond', kind: 'rule', one: 'bond rule', fields: [['text', 'Rule', 'textarea', true]] },
     bondsman: { one: 'bonding company', fields: [['name', 'Name', 'text', true], ['phone', 'Phone', 'tel'], ['notes', 'Notes', 'text']] },
     doc: { one: 'form or document', fields: [['title', 'Title', 'text', true], ['url', 'Link', 'url', true], ['notes', 'Notes', 'text']] }
   };
   const MISD_DAYS = 60;   // misdemeanor cases are set within 60 days of arrest
-  const infoSpecKey = (r) => r.section === 'court' ? (r.data?.kind === 'misd' ? 'misd' : 'felony') : r.section;
+  const infoSpecKey = (r) => r.section === 'court' ? (r.data?.kind === 'misd' ? 'misd' : 'felony')
+    : r.section === 'bond' && r.data?.kind === 'rule' ? 'bondrule' : r.section;
   const courtDay = (iso) => iso ? `${fmtDay(iso)} ${fmtShort(iso)}` : '';
   const courtTime = (t) => t ? new Date(`2000-01-01T${t}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
   const telLink = (p) => {
@@ -2674,7 +2678,24 @@
     const upcoming = (list) => list.filter((r) => d(r, 'date') >= today);
     const past = (list) => list.filter((r) => d(r, 'date') < today).reverse();
     const nextCourt = upcoming(court)[0];
-    const bonds = by('bond').sort(byText('charge')), bondsmen = by('bondsman').sort(byText('name'));
+    const bySort = (a, b) => (a.sort || 0) - (b.sort || 0) || d(a, 'charge').localeCompare(d(b, 'charge'));
+    // Groups stay in the order they first appear; a charge added later to a group shows at the end of that group
+    const bondRows = by('bond').filter((r) => d(r, 'kind') !== 'rule');
+    const catOrder = {};
+    bondRows.forEach((r) => { const c = d(r, 'category'); catOrder[c] = Math.min(catOrder[c] ?? Infinity, r.sort || 0); });
+    const bonds = bondRows.sort((a, b) => catOrder[d(a, 'category')] - catOrder[d(b, 'category')] || bySort(a, b)), bondRules = by('bond').filter((r) => d(r, 'kind') === 'rule').sort(bySort);
+    const bondsmen = by('bondsman').sort(byText('name'));
+    const bondAmount = (r) => /no bond/i.test(d(r, 'amount')) ? '<span class="nobond">No bond</span>' : esc(d(r, 'amount'));
+    const bondTable = () => {
+      if (!bonds.length) return table(['Charge', 'Class', 'Bond', 'Conditions'], [], () => '', 'No bonds listed yet.');
+      const cols = 4 + (mgr ? 1 : 0);
+      let html = '', group = null;
+      for (const r of bonds) {
+        if (d(r, 'category') !== group) { group = d(r, 'category'); if (group) html += `<tr class="info-group"><td colspan="${cols}">${esc(group)}</td></tr>`; }
+        html += `<tr data-info-row="${r.id}"><td><strong>${esc(d(r, 'charge'))}</strong></td><td>${esc(d(r, 'class'))}</td><td>${bondAmount(r)}</td><td>${esc(d(r, 'notes'))}</td>${editCell(r)}</tr>`;
+      }
+      return `<div class="table-wrap"><table class="list info-table bond-table"><thead><tr><th>Charge</th><th>Class</th><th>Bond</th><th>Conditions</th>${editHead}</tr></thead><tbody>${html}</tbody></table></div>`;
+    };
     const docs = by('doc').sort(byText('title'));
 
     const updated = (...secs) => {
@@ -2691,7 +2712,7 @@
       <thead><tr>${heads.map((h) => `<th>${h}</th>`).join('')}${editHead}</tr></thead>
       <tbody>${list.length ? list.map((r) => `<tr data-info-row="${r.id}"${r === onNow ? ' class="info-now"' : ''}>${cells(r)}${editCell(r)}</tr>`).join('') : none(heads.length, empty)}</tbody>
     </table></div>`;
-    const searchable = (r) => esc(Object.values(r.data || {}).join(' ').toLowerCase());
+    const searchable = (r) => esc(Object.entries(r.data || {}).filter(([k]) => k !== 'category').map(([, x]) => x).join(' ').toLowerCase());
 
     const oncallCells = (r) => `<td><strong>${esc(d(r, 'name'))}</strong>${r === onNow ? ' <span class="chip">On call now</span>' : ''}</td>
       <td>${esc(oncallDay(d(r, 'start')))}</td><td>${esc(oncallDay(d(r, 'end')))}</td><td>${esc(d(r, 'notes'))}</td>`;
@@ -2740,9 +2761,10 @@
       </section>
       <section class="card" id="info-bonds">
         <div class="card-head"><h2>Bond schedule</h2>${addBtn('bond', '+ Add charge')}</div>
-        <input type="search" class="info-search" data-for="info-bond-t" placeholder="Search charges" aria-label="Search charges">
-        <div id="info-bond-t">${table(['Charge', 'Class', 'Bond', 'Notes'], bonds, (r) => `<td><strong>${esc(d(r, 'charge'))}</strong></td><td>${esc(d(r, 'class'))}</td>
-          <td>${esc(d(r, 'amount'))}</td><td>${esc(d(r, 'notes'))}</td>`, 'No bonds listed yet.')}</div>
+        ${bondRules.length || mgr ? `<div class="bond-rules"><ul>${bondRules.map((r) => `<li>${esc(d(r, 'text'))}${mgr ? ` <button type="button" class="btn-link" data-info-edit="${r.id}">✎ Edit</button>` : ''}</li>`).join('')}</ul>
+          ${mgr ? addBtn('bondrule', '+ Add rule') : ''}</div>` : ''}
+        <input type="search" class="info-search" data-for="info-bond-t" placeholder="Search charges (e.g. theft, DUI, assault)" aria-label="Search charges">
+        <div id="info-bond-t">${bondTable()}</div>
         <div class="card-head info-sub"><h3>Bonding companies</h3>${addBtn('bondsman', '+ Add company')}</div>
         ${table(['Name', 'Phone', 'Notes'], bondsmen, (r) => `<td><strong>${esc(d(r, 'name'))}</strong></td><td>${telLink(d(r, 'phone'))}</td><td>${esc(d(r, 'notes'))}</td>`, 'No bonding companies listed yet.')}
         ${updated('bond', 'bondsman')}
@@ -2763,6 +2785,12 @@
         $$(`#${inp.dataset.for} tbody tr[data-info-row]`, el).forEach((tr) => {
           const r = rows.find((x) => x.id === tr.dataset.infoRow);
           tr.hidden = !!q && !searchable(r).includes(esc(q));
+        });
+        // hide a group's heading when none of its charges match
+        $$(`#${inp.dataset.for} tbody tr.info-group`, el).forEach((g) => {
+          let n = g.nextElementSibling, any = false;
+          while (n && !n.classList.contains('info-group')) { if (!n.hidden) any = true; n = n.nextElementSibling; }
+          g.hidden = !any;
         });
       };
     });
@@ -2790,7 +2818,7 @@
     $$('[data-cf]', el).forEach((b) => { b.onclick = () => { cfKind = b.dataset.cf; $$('[data-cf]', el).forEach((x) => x.classList.toggle('on', x === b)); findCourt(); }; });
     findCourt();
     if (!mgr) return;
-    $$('[data-info-edit]', el).forEach((b) => { b.onclick = () => { const r = rows.find((x) => x.id === b.dataset.infoEdit); editInfo(infoSpecKey(r), r); }; });
+    $$('[data-info-edit]', el).forEach((b) => { b.onclick = () => { const r = rows.find((x) => x.id === b.dataset.infoEdit); editInfo(infoSpecKey(r), { ...r, cats: Object.keys(catOrder).filter(Boolean) }); }; });
     $$('[data-info-add]', el).forEach((b) => {
       b.onclick = () => {
         const sec = b.dataset.infoAdd;
@@ -2802,7 +2830,8 @@
         }
         // A new felony setting picks up the day after the last one's arrest dates
         if (sec === 'felony') { const last = felony[felony.length - 1]; prefill.time = '09:00'; if (last) prefill.from = isoDate(addDays(parseDate(d(last, 'to')), 1)); }
-        editInfo(sec, { data: prefill });
+        const sorted = by(INFO_SECTIONS[sec].section || sec);
+        editInfo(sec, { data: prefill, cats: Object.keys(catOrder).filter(Boolean), sort: sorted.reduce((m, x) => Math.max(m, x.sort || 0), 0) + 1 });
       };
     });
   };
@@ -2815,8 +2844,10 @@
       <h2>${r.id ? 'Edit' : 'Add'} ${esc(spec.one)}</h2>
       <form id="info-form" autocomplete="off">
         ${spec.fields.map(([k, label, type, req]) => `<label>${esc(label)}${req ? '' : ' <span class="hint">(optional)</span>'}
-          <input name="${k}" type="${type}" ${req ? 'required' : ''} maxlength="${type === 'url' ? 1000 : 300}" value="${v(k)}"
-            ${sec === 'oncall' && k === 'name' ? 'list="info-people"' : ''} ${type === 'url' ? 'placeholder="https://…"' : ''}></label>`).join('')}
+          ${type === 'textarea' ? `<textarea name="${k}" rows="4" maxlength="1000" ${req ? 'required' : ''}>${v(k)}</textarea>`
+          : `<input name="${k}" type="${type}" ${req ? 'required' : ''} maxlength="${type === 'url' ? 1000 : 300}" value="${v(k)}"
+            ${sec === 'oncall' && k === 'name' ? 'list="info-people"' : sec === 'bond' && k === 'category' ? 'list="info-cats"' : ''} ${type === 'url' ? 'placeholder="https://…"' : ''}>`}</label>`).join('')}
+        ${sec === 'bond' ? `<datalist id="info-cats">${[...new Set((r.cats || []))].map((c) => `<option value="${esc(c)}">`).join('')}</datalist>` : ''}
         ${sec === 'oncall' ? `<p class="hint" id="info-week"></p><datalist id="info-people">${people.map((p) => `<option value="${esc(p.full_name)}">`).join('')}</datalist>` : ''}
         <div class="actions">
           <button class="btn primary" type="submit">Save</button>
@@ -2837,7 +2868,7 @@
         if (sec === 'doc' && !safeUrl(data.url)) throw new Error('The link has to start with https://');
         if (spec.kind) data.kind = spec.kind;
         if (sec === 'felony' && data.to < data.from) throw new Error('“Arrested through” has to be on or after “Arrested from”.');
-        const q = r.id ? sb.from('info_rows').update({ data }).eq('id', r.id) : sb.from('info_rows').insert({ section: spec.section || sec, data });
+        const q = r.id ? sb.from('info_rows').update({ data }).eq('id', r.id) : sb.from('info_rows').insert({ section: spec.section || sec, data, sort: r.sort || 0 });
         const res = await q;
         if (res.error) throw res.error;
         closeModal(); toast('Saved.'); showView('info');
