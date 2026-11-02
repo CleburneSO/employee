@@ -1116,3 +1116,23 @@ main + .site-foot { margin-top: -1.5rem; }
   .bond-table tr.info-group { border: 0; background: none; box-shadow: none; padding: 0; margin: 1rem 0 .35rem; }
   .bond-table tr.info-group td { background: none; padding: 0; display: block; }
 }
+/* Admin home: who's off */
+.whos-off { margin-bottom: 1.25rem; }
+.wo-from { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .85rem; font-weight: 600; color: var(--muted); }
+.wo-from input { width: auto; }
+.wo-days { list-style: none; margin: 0; padding: 0; }
+.wo-day { display: grid; grid-template-columns: 7.5rem 1fr; gap: .25rem 1rem; padding: .5rem 0; border-top: 1px solid var(--line); align-items: start; }
+.wo-day:first-child { border-top: 0; }
+.wo-day.wo-today .wo-date strong { color: var(--primary); }
+.wo-day.wo-none { color: var(--muted); padding: .3rem 0; }
+.wo-day.wo-none:not(.wo-today) { display: none; }   /* only days someone is off (and today) */
+.wo-date { white-space: nowrap; padding-top: .2rem; }
+.wo-people { display: flex; flex-wrap: wrap; gap: .35rem; }
+.wo-chip { border: 1px solid var(--line); background: var(--bg); border-radius: 99px; padding: .2rem .7rem; font: inherit; font-weight: 600; font-size: .88rem; color: var(--text); cursor: pointer; }
+.wo-chip span { font-weight: 400; color: var(--muted); margin-left: .15rem; }
+.wo-chip:hover { border-color: var(--primary); }
+.wo-chip.pending { border-style: dashed; background: none; }
+.wo-key { margin: .6rem 0 0; font-size: .8rem; }
+@media (max-width: 520px) {
+  .wo-day { grid-template-columns: 1fr; gap: .3rem; }
+}

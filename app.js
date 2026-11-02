@@ -1893,6 +1893,11 @@
         ${on('uniforms') ? tile('uniadmin', 'Uniform orders to place', nPlace, nPlace ? 'Approved, not ordered from Galls yet' : 'Nothing to order', 'Open', { big: true }) : ''}
         ${tile('payroll', 'Waiting on a signature', toSign.length, toSign.length ? `Fixed timesheets: ${esc(names(toSign))}` : 'None', 'See', { big: true })}
       </div>
+      <section class="card whos-off" id="whos-off">
+        <div class="card-head"><h2>Who’s off</h2>
+          <label class="wo-from">Two weeks starting<input type="date" id="wo-from" value="${isoDate(new Date())}"></label></div>
+        <div id="wo-list"><div class="hint">Loading…</div></div>
+      </section>
       <h2 class="tile-head">Go to</h2>
       <div class="tiles">
         ${tile('payroll', 'Payroll', null, 'Print or export a pay period (or one special duty), past timesheets and time off', 'Open')}
@@ -1901,7 +1906,42 @@
         ${tile('settings', 'Settings', null, `Invite someone, special duties${isOwner() ? ', backups, audit log' : ''}`, 'Open')}
       </div>`;
     $$('[data-go]', el).forEach((b) => { b.onclick = () => { state.scrollTo = b.dataset.scroll || null; showView(b.dataset.go); window.scrollTo(0, 0); }; });
+    const from = $('#wo-from');
+    from.onchange = () => { if (from.value) whosOff($('#wo-list'), from.value); };
+    whosOff($('#wo-list'), from.value);
   };
+
+  // Who's off: approved (and still-pending) time off for each day of a two-week stretch, so nobody has to dig through requests
+  const OFF_DAYS = 14;
+  async function whosOff(box, fromIso) {
+    const toIso = isoDate(addDays(parseDate(fromIso), OFF_DAYS - 1));
+    const { data, error } = await sb.from('time_off_requests').select('id, user_id, type, start_date, end_date, hours, status')
+      .in('status', ['approved', 'pending']).neq('type', 'comp_earned').lte('start_date', toIso).gte('end_date', fromIso);
+    if (!box.isConnected) return;
+    if (error) { box.innerHTML = `<p class="error-text">${esc(error.message)}</p>`; return; }
+    const today = isoDate(new Date());
+    const offLabel = (r) => r.type === 'comp' ? 'Comp' : typeLabel(r.type);
+    const days = [...Array(OFF_DAYS)].map((_, i) => isoDate(addDays(parseDate(fromIso), i))).map((iso) => ({
+      iso, list: (data || []).filter((r) => r.start_date <= iso && iso <= r.end_date)
+        .sort((a, b) => (a.status === 'pending') - (b.status === 'pending') || personName(a.user_id).localeCompare(personName(b.user_id)))
+    }));
+    const any = days.some((x) => x.list.length);
+    box.innerHTML = !any ? `<p class="hint" style="margin:0">Nobody is off ${esc(fmtShort(fromIso))} – ${esc(fmtShort(toIso))}.</p>` : `<ul class="wo-days">${days.map(({ iso, list }) => `
+      <li class="wo-day${iso === today ? ' wo-today' : ''}${list.length ? '' : ' wo-none'}">
+        <div class="wo-date"><strong>${iso === today ? 'Today' : esc(fmtDay(iso))}</strong> ${esc(monthDay(iso))}</div>
+        <div class="wo-people">${list.length ? list.map((r) => `<button type="button" class="wo-chip${r.status === 'pending' ? ' pending' : ''}" data-wo="${r.id}"
+          title="${esc(dateRange(r.start_date, r.end_date))}">${esc(personName(r.user_id, 'Unknown'))} <span>${esc(offLabel(r))}${r.status === 'pending' ? ' · pending' : ''}</span></button>`).join('')
+          : '<span class="hint">No one off</span>'}</div>
+      </li>`).join('')}</ul>
+      <p class="hint wo-key">Approved vacation, sick and comp time. Pending requests are shown dashed. Tap a name to open the request.</p>`;
+    $$('[data-wo]', box).forEach((b) => {
+      b.onclick = async () => {
+        const { data: r, error: e } = await sb.from('time_off_requests').select('*').eq('id', b.dataset.wo).single();
+        if (e) return toast(e.message, true);
+        openTimeOff(r);
+      };
+    });
+  }
 
   // Who still owes a timesheet: last pay period (once it's over), and the current one on its last day
   async function missingTimesheets(people) {
@@ -2636,7 +2676,6 @@
     bond: { one: 'charge', fields: [['category', 'Group', 'text'], ['charge', 'Charge', 'text', true], ['class', 'Class', 'text'], ['amount', 'Bond', 'text', true],
       ['notes', 'Conditions', 'text']] },
     bondrule: { section: 'bond', kind: 'rule', one: 'bond rule', fields: [['text', 'Rule', 'textarea', true]] },
-    bondsman: { one: 'bonding company', fields: [['name', 'Name', 'text', true], ['phone', 'Phone', 'tel'], ['notes', 'Notes', 'text']] },
     doc: { one: 'form or document', fields: [['title', 'Title', 'text', true], ['url', 'Link', 'url', true], ['notes', 'Notes', 'text']] }
   };
   const MISD_DAYS = 60;   // misdemeanor cases are set within 60 days of arrest
@@ -2644,10 +2683,6 @@
     : r.section === 'bond' && r.data?.kind === 'rule' ? 'bondrule' : r.section;
   const courtDay = (iso) => iso ? `${fmtDay(iso)} ${fmtShort(iso)}` : '';
   const courtTime = (t) => t ? new Date(`2000-01-01T${t}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
-  const telLink = (p) => {
-    const digits = String(p || '').replace(/[^\d+]/g, '');
-    return digits ? `<a href="tel:${esc(digits)}">${esc(p)}</a>` : esc(p || '');
-  };
   const safeUrl = (u) => /^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '';
   const oncallWed = (iso) => { const x = parseDate(iso.slice(0, 10)); return isoDate(addDays(x, -((x.getDay() + 4) % 7))); };   // Wednesday of that week
   const oncallDay = (iso) => iso ? `${fmtDay(iso.slice(0, 10))} ${monthDay(iso.slice(0, 10))}` : '';
@@ -2684,7 +2719,6 @@
     const catOrder = {};
     bondRows.forEach((r) => { const c = d(r, 'category'); catOrder[c] = Math.min(catOrder[c] ?? Infinity, r.sort || 0); });
     const bonds = bondRows.sort((a, b) => catOrder[d(a, 'category')] - catOrder[d(b, 'category')] || bySort(a, b)), bondRules = by('bond').filter((r) => d(r, 'kind') === 'rule').sort(bySort);
-    const bondsmen = by('bondsman').sort(byText('name'));
     const bondAmount = (r) => /no bond/i.test(d(r, 'amount')) ? '<span class="nobond">No bond</span>' : esc(d(r, 'amount'));
     const bondTable = () => {
       if (!bonds.length) return table(['Charge', 'Class', 'Bond', 'Conditions'], [], () => '', 'No bonds listed yet.');
@@ -2765,9 +2799,7 @@
           ${mgr ? addBtn('bondrule', '+ Add rule') : ''}</div>` : ''}
         <input type="search" class="info-search" data-for="info-bond-t" placeholder="Search charges (e.g. theft, DUI, assault)" aria-label="Search charges">
         <div id="info-bond-t">${bondTable()}</div>
-        <div class="card-head info-sub"><h3>Bonding companies</h3>${addBtn('bondsman', '+ Add company')}</div>
-        ${table(['Name', 'Phone', 'Notes'], bondsmen, (r) => `<td><strong>${esc(d(r, 'name'))}</strong></td><td>${telLink(d(r, 'phone'))}</td><td>${esc(d(r, 'notes'))}</td>`, 'No bonding companies listed yet.')}
-        ${updated('bond', 'bondsman')}
+        ${updated('bond')}
       </section>
       <section class="card" id="info-docs">
         <div class="card-head"><h2>Forms &amp; documents</h2>${addBtn('doc', '+ Add link')}</div>
