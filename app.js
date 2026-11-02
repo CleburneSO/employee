@@ -1911,6 +1911,54 @@
     whosOff($('#wo-list'), from.value);
   };
 
+  // Work schedules, so "who's off" only lists days someone was scheduled to work.
+  // A and B shifts work a 2-2-3 (Pitman) rotation, opposite each other; everyone else works Monday–Friday.
+  // Where the rotation starts is worked out from recent A/B timesheets (or set as ROTATION_A_START in config.js).
+  const PITMAN = [1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0];   // A shift, day 0–13 of the cycle
+  const dayNum = (iso) => Math.round((parseDate(iso) - parseDate('2026-01-04')) / 86400000);
+  const cycleDay = (iso, start) => (((dayNum(iso) - dayNum(start)) % 14) + 14) % 14;
+  async function shiftRotation() {
+    if (state.rotationStart !== undefined) return state.rotationStart;
+    if (cfg.ROTATION_A_START) return (state.rotationStart = cfg.ROTATION_A_START);
+    state.rotationStart = null;
+    try {
+      const people = Object.keys(state.people).length ? Object.values(state.people) : await loadPeople();
+      const shiftOf = Object.fromEntries(people.filter((x) => x.shift === 'A' || x.shift === 'B').map((x) => [x.id, x.shift]));
+      if (!Object.keys(shiftOf).length) return null;
+      const since = isoDate(addDays(new Date(), -120));
+      const { data, error } = await sb.from('timesheets').select('user_id, entries').in('user_id', Object.keys(shiftOf)).gte('period_start', since);
+      if (error || !data) return null;
+      // Regular (not special-duty) days worked by A and B people
+      const worked = [];
+      for (const t of data) for (const e of t.entries || []) if (e.date && Number(e.hours) > 0 && !e.duty_id) worked.push([e.date, shiftOf[t.user_id]]);
+      if (worked.length < 10) return null;
+      // Try each of the 14 possible starting days; keep the one that matches the most worked days
+      let best = null, bestScore = -1;
+      for (let k = 0; k < 14; k++) {
+        const start = isoDate(addDays(parseDate('2026-01-04'), k));
+        const score = worked.reduce((n, [iso, sh]) => n + (PITMAN[cycleDay(iso, start)] === (sh === 'A' ? 1 : 0) ? 1 : 0), 0);
+        if (score > bestScore) { bestScore = score; best = start; }
+      }
+      if (bestScore / worked.length >= 0.8) state.rotationStart = best;   // only trust a clear match
+    } catch (_) { /* fall back to showing every day */ }
+    return state.rotationStart;
+  }
+  // Is this person scheduled to work that day? (null = don't know)
+  function scheduledOn(id, iso, rotStart) {
+    const p = state.people[id];
+    if (!p) return null;
+    if (p.shift === 'A' || p.shift === 'B') return rotStart ? PITMAN[cycleDay(iso, rotStart)] === (p.shift === 'A' ? 1 : 0) : null;
+    const dow = parseDate(iso).getDay();
+    return dow >= 1 && dow <= 5;
+  }
+  // The days of a time-off request someone was scheduled to work. If none of them are (e.g. a traded shift), all of its days.
+  function offDays(r, rotStart) {
+    const days = [];
+    for (let d = parseDate(r.start_date); isoDate(d) <= r.end_date; d = addDays(d, 1)) days.push(isoDate(d));
+    const work = days.filter((iso) => scheduledOn(r.user_id, iso, rotStart) !== false);
+    return work.length ? work : days;
+  }
+
   // Who's off: approved (and still-pending) time off for each day of a two-week stretch, so nobody has to dig through requests
   const OFF_DAYS = 14;
   async function whosOff(box, fromIso) {
@@ -1919,10 +1967,12 @@
       .in('status', ['approved', 'pending']).neq('type', 'comp_earned').lte('start_date', toIso).gte('end_date', fromIso);
     if (!box.isConnected) return;
     if (error) { box.innerHTML = `<p class="error-text">${esc(error.message)}</p>`; return; }
+    const rot = await shiftRotation();
+    const offOn = Object.fromEntries((data || []).map((r) => [r.id, new Set(offDays(r, rot))]));
     const today = isoDate(new Date());
     const offLabel = (r) => r.type === 'comp' ? 'Comp' : typeLabel(r.type);
     const days = [...Array(OFF_DAYS)].map((_, i) => isoDate(addDays(parseDate(fromIso), i))).map((iso) => ({
-      iso, list: (data || []).filter((r) => r.start_date <= iso && iso <= r.end_date)
+      iso, list: (data || []).filter((r) => offOn[r.id].has(iso))
         .sort((a, b) => (a.status === 'pending') - (b.status === 'pending') || personName(a.user_id).localeCompare(personName(b.user_id)))
     }));
     const any = days.some((x) => x.list.length);
@@ -1933,7 +1983,7 @@
           title="${esc(dateRange(r.start_date, r.end_date))}">${esc(personName(r.user_id, 'Unknown'))} <span>${esc(offLabel(r))}${r.status === 'pending' ? ' · pending' : ''}</span></button>`).join('')
           : '<span class="hint">No one off</span>'}</div>
       </li>`).join('')}</ul>
-      <p class="hint wo-key">Approved vacation, sick and comp time. Pending requests are shown dashed. Tap a name to open the request.</p>`;
+      <p class="hint wo-key">Approved vacation, sick and comp time, on the days each person was scheduled to work${rot ? '' : ' (A/B rotation not worked out yet, so A and B shift requests show every day)'}. Pending requests are shown dashed. Tap a name to open the request.</p>`;
     $$('[data-wo]', box).forEach((b) => { b.onclick = () => openOffRequest(b.dataset.wo); });
   }
   async function openOffRequest(id) {
@@ -2246,11 +2296,9 @@
       const offR = await sb.from('time_off_requests').select('id, user_id, type, start_date, end_date, status')
         .in('status', ['approved', 'pending']).neq('type', 'comp_earned').lte('start_date', isoDate(addDays(gridEnd, -1))).gte('end_date', isoDate(gridStart));
       if (!offR.error) {
-        for (const r of offR.data) {
-          for (let d = parseDate(r.start_date > isoDate(gridStart) ? r.start_date : isoDate(gridStart)); isoDate(d) <= r.end_date && d < gridEnd; d = addDays(d, 1)) {
-            (offByDay[isoDate(d)] ||= []).push(r);
-          }
-        }
+        if (!Object.keys(state.people).length) await loadPeople().catch(() => {});
+        const rot = await shiftRotation();
+        for (const r of offR.data) for (const iso of offDays(r, rot)) if (iso >= isoDate(gridStart) && iso < isoDate(gridEnd)) (offByDay[iso] ||= []).push(r);
         Object.values(offByDay).forEach((list) => list.sort((a, b) => (a.status === 'pending') - (b.status === 'pending') || personName(a.user_id).localeCompare(personName(b.user_id))));
       }
     }
