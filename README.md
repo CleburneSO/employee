@@ -80,7 +80,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 
 **Info (everyone; Sheriff's Office)**
 - One page of reference info: **Investigator on call** (who's on call right now, until when, and who's next, plus the schedule), the **Court calendar** (upcoming dates; past ones folded away), the **Bond schedule** (searchable) with **Bonding companies**, and **Forms & documents** (links that open in a new tab — e.g. a shared Google Drive or county website file). Each section shows when it was last updated and by whom.
-- Every manager can add, edit or delete rows (**+ Add week**, **✎ Edit**). A new on-call week starts where the last one ends and runs 7 days. Changes are in the audit log. Stored in the `info_rows` table.
+- Every manager can add, edit or delete rows (**+ Add week**, **✎ Edit**). On-call weeks always run **Wednesday through the following Tuesday**: pick any day and the portal sets that week (Wed–Tue), and **+ Add week** starts on the Wednesday after the last week on the schedule. Changes are in the audit log. Stored in the `info_rows` table.
 
 **Patrol stats (turned off)**
 - The Stats tab is turned off in `config.js` (`FEATURES: { stats: false, ... }`). All of its code and data are still there; change `stats` to `true` and upload the site to bring it back. Shifts (A/B) and shift supervisors stay on either way (`shifts: true`), since supervisors approve their shift's time off.

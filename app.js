@@ -2626,21 +2626,22 @@
   // Reference info for everyone; managers keep it up to date. Each row's fields live in info_rows.data.
   // field: [key, label, input type, required]
   const INFO_SECTIONS = {
-    oncall: { one: 'on-call week', fields: [['name', 'Investigator', 'text', true], ['start', 'Starts', 'datetime-local', true],
-      ['end', 'Ends', 'datetime-local', true], ['notes', 'Notes', 'text']] },
+    // On-call weeks run Wednesday through the following Tuesday; pick any day and it's set to that week
+    oncall: { one: 'on-call week', fields: [['name', 'Investigator', 'text', true], ['start', 'Week of', 'date', true], ['notes', 'Notes', 'text']] },
     court: { one: 'court date', fields: [['date', 'Date', 'date', true], ['time', 'Time', 'time'], ['court', 'Court / case', 'text', true],
       ['where', 'Where', 'text'], ['notes', 'Notes', 'text']] },
     bond: { one: 'bond', fields: [['charge', 'Charge', 'text', true], ['class', 'Class', 'text'], ['amount', 'Bond', 'text', true], ['notes', 'Notes', 'text']] },
     bondsman: { one: 'bonding company', fields: [['name', 'Name', 'text', true], ['phone', 'Phone', 'tel'], ['notes', 'Notes', 'text']] },
     doc: { one: 'form or document', fields: [['title', 'Title', 'text', true], ['url', 'Link', 'url', true], ['notes', 'Notes', 'text']] }
   };
-  const infoWhen = (s) => s ? new Date(s).toLocaleString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   const telLink = (p) => {
     const digits = String(p || '').replace(/[^\d+]/g, '');
     return digits ? `<a href="tel:${esc(digits)}">${esc(p)}</a>` : esc(p || '');
   };
   const safeUrl = (u) => /^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '';
-  const localDT = (d) => `${isoDate(d)}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const oncallWed = (iso) => { const x = parseDate(iso.slice(0, 10)); return isoDate(addDays(x, -((x.getDay() + 4) % 7))); };   // Wednesday of that week
+  const oncallDay = (iso) => iso ? `${fmtDay(iso.slice(0, 10))} ${monthDay(iso.slice(0, 10))}` : '';
+  const oncallRange = (start) => `${oncallDay(start)} – ${oncallDay(isoDate(addDays(parseDate(start), 6)))}`;
 
   views.info = async (el) => {
     const [rowsR] = await Promise.all([
@@ -2655,11 +2656,13 @@
     const mgr = isManager();
     const now = new Date(), today = isoDate(now);
 
+    // Each week covers start (a Wednesday) through end (the Tuesday after), all day
+    const sd = (r) => d(r, 'start').slice(0, 10), ed = (r) => d(r, 'end').slice(0, 10);
     const oncall = by('oncall').sort(byText('start'));
-    const onNow = oncall.find((r) => new Date(d(r, 'start')) <= now && now < new Date(d(r, 'end')));
-    const nextUp = oncall.find((r) => new Date(d(r, 'start')) > now);
-    const oncallUpcoming = oncall.filter((r) => new Date(d(r, 'end')) > now);
-    const oncallPast = oncall.filter((r) => new Date(d(r, 'end')) <= now).reverse().slice(0, 10);
+    const onNow = oncall.find((r) => sd(r) <= today && today <= ed(r));
+    const nextUp = oncall.find((r) => sd(r) > today);
+    const oncallUpcoming = oncall.filter((r) => ed(r) >= today);
+    const oncallPast = oncall.filter((r) => ed(r) < today).reverse().slice(0, 10);
     const courtKey = (r) => `${d(r, 'date')}T${d(r, 'time') || '00:00'}`;
     const court = by('court').sort((a, b) => courtKey(a).localeCompare(courtKey(b)));
     const courtUpcoming = court.filter((r) => d(r, 'date') >= today);
@@ -2684,7 +2687,7 @@
     const searchable = (r) => esc(Object.values(r.data || {}).join(' ').toLowerCase());
 
     const oncallCells = (r) => `<td><strong>${esc(d(r, 'name'))}</strong>${r === onNow ? ' <span class="chip">On call now</span>' : ''}</td>
-      <td>${esc(infoWhen(d(r, 'start')))}</td><td>${esc(infoWhen(d(r, 'end')))}</td><td>${esc(d(r, 'notes'))}</td>`;
+      <td>${esc(oncallDay(d(r, 'start')))}</td><td>${esc(oncallDay(d(r, 'end')))}</td><td>${esc(d(r, 'notes'))}</td>`;
     const courtCells = (r) => `<td>${d(r, 'date') ? `${esc(fmtDay(d(r, 'date')))} ${esc(fmtShort(d(r, 'date')))}` : ''}</td><td>${d(r, 'time') ? esc(new Date(`2000-01-01T${d(r, 'time')}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) : ''}</td>
       <td>${esc(d(r, 'court'))}</td><td>${esc(d(r, 'where'))}</td><td>${esc(d(r, 'notes'))}</td>`;
 
@@ -2696,9 +2699,9 @@
         <div class="card-head"><h2>Investigator on call</h2>${addBtn('oncall', '+ Add week')}</div>
         ${onNow ? `<div class="info-oncall-now">
             <div><div class="info-oncall-name">${esc(d(onNow, 'name'))}</div>
-              <div class="hint" style="margin:0">On call until ${esc(infoWhen(d(onNow, 'end')))}${d(onNow, 'notes') ? ` · ${esc(d(onNow, 'notes'))}` : ''}</div></div>
+              <div class="hint" style="margin:0">On call through ${esc(oncallDay(d(onNow, 'end')))}${d(onNow, 'notes') ? ` · ${esc(d(onNow, 'notes'))}` : ''}</div></div>
           </div>` : `<p class="info-oncall-none">No one is on the schedule right now.${mgr ? ' Add a week below.' : ''}</p>`}
-        ${nextUp ? `<p class="hint">Next: <strong>${esc(d(nextUp, 'name'))}</strong> from ${esc(infoWhen(d(nextUp, 'start')))}</p>` : ''}
+        ${nextUp ? `<p class="hint">Next: <strong>${esc(d(nextUp, 'name'))}</strong> starting ${esc(oncallDay(d(nextUp, 'start')))}</p>` : ''}
         <details class="fold" ${mgr ? 'open' : ''}><summary><h3>Schedule</h3></summary>
           ${table(['Investigator', 'From', 'To', 'Notes'], oncallUpcoming, oncallCells, 'Nothing scheduled yet.')}
           ${oncallPast.length ? `<details class="fold"><summary><h3>Past weeks</h3></summary>${table(['Investigator', 'From', 'To', 'Notes'], oncallPast, oncallCells, '')}</details>` : ''}
@@ -2749,10 +2752,9 @@
         const sec = b.dataset.infoAdd;
         const prefill = {};
         if (sec === 'oncall') {
-          // Start the next week where the last one ends (or now), same hour, 7 days long
+          // The Wednesday after the last week on the schedule (or this week's Wednesday)
           const last = oncall[oncall.length - 1];
-          const start = last && new Date(d(last, 'end')) > now ? new Date(d(last, 'end')) : new Date(today + 'T08:00');
-          prefill.start = localDT(start); prefill.end = localDT(addDays(start, 7));
+          prefill.start = last && ed(last) >= today ? isoDate(addDays(parseDate(sd(last)), 7)) : oncallWed(today);
         }
         if (sec === 'court') prefill.date = today;
         editInfo(sec, { data: prefill });
@@ -2770,19 +2772,23 @@
         ${spec.fields.map(([k, label, type, req]) => `<label>${esc(label)}${req ? '' : ' <span class="hint">(optional)</span>'}
           <input name="${k}" type="${type}" ${req ? 'required' : ''} maxlength="${type === 'url' ? 1000 : 300}" value="${v(k)}"
             ${sec === 'oncall' && k === 'name' ? 'list="info-people"' : ''} ${type === 'url' ? 'placeholder="https://…"' : ''}></label>`).join('')}
-        ${sec === 'oncall' ? `<datalist id="info-people">${people.map((p) => `<option value="${esc(p.full_name)}">`).join('')}</datalist>` : ''}
+        ${sec === 'oncall' ? `<p class="hint" id="info-week"></p><datalist id="info-people">${people.map((p) => `<option value="${esc(p.full_name)}">`).join('')}</datalist>` : ''}
         <div class="actions">
           <button class="btn primary" type="submit">Save</button>
           ${r.id ? '<button class="btn danger" type="button" id="info-del">Delete</button>' : ''}
         </div>
       </form>`);
     const f = $('#info-form');
+    if (sec === 'oncall') {
+      const show = () => { $('#info-week').textContent = f.start.value ? `On call ${oncallRange(oncallWed(f.start.value))} (Wednesday through Tuesday)` : 'Pick any day; the week runs Wednesday through Tuesday.'; };
+      f.start.oninput = show; f.start.onchange = show; show();
+    }
     f.onsubmit = (ev) => {
       ev.preventDefault();
       withBusy(f.querySelector('button[type=submit]'), async () => {
         const data = {};
         spec.fields.forEach(([k]) => { const x = f[k].value.trim(); if (x) data[k] = x; });
-        if (sec === 'oncall' && new Date(data.end) <= new Date(data.start)) throw new Error('The end has to be after the start.');
+        if (sec === 'oncall') { data.start = oncallWed(data.start); data.end = isoDate(addDays(parseDate(data.start), 6)); }
         if (sec === 'doc' && !safeUrl(data.url)) throw new Error('The link has to start with https://');
         const q = r.id ? sb.from('info_rows').update({ data }).eq('id', r.id) : sb.from('info_rows').insert({ section: sec, data });
         const res = await q;
