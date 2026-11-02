@@ -365,6 +365,7 @@
       <h1 class="auth-org">${esc(ORG)}</h1>
       ${PORTAL_LABEL ? `<p class="portal-label-auth">${esc(PORTAL_LABEL)} portal</p>` : ''}
       ${signedOutForIdle && !reset ? `<div class="notice">You were signed out after ${Math.round(IDLE_MS / 60000)} minutes of inactivity.</div>` : ''}
+      <p class="auth-title">Employee Portal</p>
       <p class="muted">${reset ? 'Enter your email and we’ll send you a reset link.' : 'Sign in to your account.'}</p>
       <form id="auth-form">
         <label>Email<input type="email" name="email" required autocomplete="email"></label>
@@ -372,7 +373,8 @@
         <button class="btn primary block" type="submit">${reset ? 'Send reset link' : 'Sign in'}</button>
       </form>
       <button class="btn-link" id="toggle-mode">${reset ? 'Back to sign in' : 'Forgot password?'}</button>
-    </div></div>`;
+      <p class="auth-legal">Authorized personnel only. Activity on this site is recorded.</p>
+    </div>${footerHTML()}</div>`;
     signedOutForIdle = false;
     $('#toggle-mode').onclick = () => renderLogin(reset ? 'login' : 'reset');
     $('#auth-form').onsubmit = (e) => {
@@ -497,7 +499,8 @@
       <header class="topbar">
         <div class="brand">${logoImg('brand-logo')}<span>${esc(ORG)}</span>${PORTAL_LABEL ? `<b class="portal-label">${esc(PORTAL_LABEL)}</b>` : ''}</div>
         <div class="user">
-          <span>${esc(state.profile.full_name)}</span>
+          <span class="avatar" title="${esc(state.profile.full_name)}" aria-hidden="true">${esc(initialsOf(state.profile.full_name))}</span>
+          <span class="user-name">${esc(state.profile.full_name)}</span>
           <span class="role">${esc(state.profile.role)}</span>
           <button id="theme-toggle" class="theme-toggle" type="button"></button>
           <button id="signout" class="btn-link light">Sign out</button>
@@ -509,9 +512,11 @@
         </button>
         <nav class="tabs" id="main-nav">${tabs.map(tabBtn).join('')}</nav>
       </div>
+      <div id="page-head" class="page-head" hidden></div>
       <div id="due" class="due-wrap"></div>
       <nav id="adm-nav" class="adm-nav" hidden aria-label="Admin pages"></nav>
-      <main id="view"></main>`;
+      <main id="view"></main>
+      ${footerHTML()}`;
     $('#signout').onclick = () => sb.auth.signOut();
     bindThemeToggle();
     startIdleWatch();
@@ -520,6 +525,34 @@
     $('.menu-toggle').onclick = () => setMenuOpen(!$('.tabs-wrap').classList.contains('open'));
     showView(state.view);
   }
+
+  const initialsOf = (n) => String(n || '?').split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+  const footerHTML = () => `<footer class="site-foot">
+      <div>${esc(ORG.replace(/\b([A-Z])([A-Z']+)/g, (m, a, b) => a + b.toLowerCase()))}${PORTAL_LABEL ? ` · ${esc(PORTAL_LABEL)}` : ''} · Employee Portal</div>
+      <div>For official use only. Questions or problems? Ask your supervisor.</div>
+    </footer>`;
+  // Title and one line under it at the top of each page (admin pages have their own row of links instead)
+  const PAGE_HEADS = {
+    calendar: ['Calendar', 'Announcements, trainings, court dates and holidays'],
+    info: ['Info', 'On-call investigator, court calendar, bonds and forms'],
+    timesheets: ['My Timesheets', 'Fill out, sign and submit your timesheet each pay period'],
+    timeoff: ['Time Off', 'Request vacation or sick time and see your requests'],
+    uniforms: ['Uniforms', 'Your uniform allowance and orders'],
+    cases: ['Case Numbers', 'Reserve the next case number and search the log'],
+    stats: ['Stats', 'Patrol stats by month'],
+    offduty: ['Off-Duty Jobs', 'Open off-duty work and your requests']
+  };
+  function renderPageHead(v) {
+    const ph = $('#page-head'); if (!ph) return;
+    const h = PAGE_HEADS[v];
+    ph.hidden = !h;
+    if (!h) { ph.innerHTML = ''; return; }
+    const title = v === 'timeoff' && hasComp(state.profile) ? 'Time Off & Comp' : h[0];
+    const sub = v === 'timeoff' && hasComp(state.profile) ? 'Request time off, use or log comp time, and see your balance' : h[1];
+    ph.innerHTML = `<h1>${esc(title)}</h1><p>${esc(sub)}</p>`;
+  }
+  const skeleton = () => `<div class="skel" aria-label="Loading"><div class="skel-card"><span></span><span></span><span class="short"></span></div>
+    <div class="skel-card"><span></span><span class="short"></span></div></div>`;
 
   // Phone menu: the tab list drops down from the menu button; tap outside or Esc closes it
   function setMenuOpen(open) {
@@ -609,9 +642,10 @@
     const cur = $('.menu-current');
     if (cur) cur.textContent = $('.tabs button[data-view].active')?.dataset.label || '';
     renderAdminNav(isAdmin ? v : null);
+    renderPageHead(isAdmin ? null : v);
     refreshAdminCount();
     const el = $('#view');
-    el.innerHTML = '<div class="loading">Loading…</div>';
+    el.innerHTML = skeleton();
     try { await views[v](el); labelTables(el); }
     catch (err) { el.innerHTML = `<div class="card"><p class="error-text">${esc(err.message)}</p></div>`; }
   }
@@ -2651,7 +2685,7 @@
 
     const oncallCells = (r) => `<td><strong>${esc(d(r, 'name'))}</strong>${r === onNow ? ' <span class="chip">On call now</span>' : ''}</td>
       <td>${esc(infoWhen(d(r, 'start')))}</td><td>${esc(infoWhen(d(r, 'end')))}</td><td>${esc(d(r, 'notes'))}</td>`;
-    const courtCells = (r) => `<td>${d(r, 'date') ? `${esc(fmtDay(d(r, 'date')))} ${esc(fmtShort(d(r, 'date')))}` : ''}</td><td>${esc(clock(d(r, 'time')))}</td>
+    const courtCells = (r) => `<td>${d(r, 'date') ? `${esc(fmtDay(d(r, 'date')))} ${esc(fmtShort(d(r, 'date')))}` : ''}</td><td>${d(r, 'time') ? esc(new Date(`2000-01-01T${d(r, 'time')}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) : ''}</td>
       <td>${esc(d(r, 'court'))}</td><td>${esc(d(r, 'where'))}</td><td>${esc(d(r, 'notes'))}</td>`;
 
     el.innerHTML = `
