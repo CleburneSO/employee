@@ -534,7 +534,7 @@
   // Title and one line under it at the top of each page (admin pages have their own row of links instead)
   const PAGE_HEADS = {
     calendar: ['Calendar', 'Announcements, trainings, court dates and holidays'],
-    info: ['Info', 'On-call investigator, court calendar, bonds and forms'],
+    info: ['Info', 'On-call investigator, court dates, bonds and forms'],
     timesheets: ['My Timesheets', 'Fill out, sign and submit your timesheet each pay period'],
     timeoff: ['Time Off', 'Request vacation or sick time and see your requests'],
     uniforms: ['Uniforms', 'Your uniform allowance and orders'],
@@ -2628,12 +2628,18 @@
   const INFO_SECTIONS = {
     // On-call weeks run Wednesday through the following Tuesday; pick any day and it's set to that week
     oncall: { one: 'on-call week', fields: [['name', 'Investigator', 'text', true], ['start', 'Week of', 'date', true], ['notes', 'Notes', 'text']] },
-    court: { one: 'court date', fields: [['date', 'Date', 'date', true], ['time', 'Time', 'time'], ['court', 'Court / case', 'text', true],
-      ['where', 'Where', 'text'], ['notes', 'Notes', 'text']] },
+    // District court settings (section 'court'): felony cases go by arrest-date range; misdemeanors pick a date within 60 days of arrest
+    felony: { section: 'court', kind: 'felony', one: 'felony court setting', fields: [['from', 'Arrested from', 'date', true], ['to', 'Arrested through', 'date', true],
+      ['date', 'Court date', 'date', true], ['time', 'Time', 'time'], ['notes', 'Notes', 'text']] },
+    misd: { section: 'court', kind: 'misd', one: 'misdemeanor court date', fields: [['date', 'Court date', 'date', true], ['time', 'Time', 'time'], ['notes', 'Notes', 'text']] },
     bond: { one: 'bond', fields: [['charge', 'Charge', 'text', true], ['class', 'Class', 'text'], ['amount', 'Bond', 'text', true], ['notes', 'Notes', 'text']] },
     bondsman: { one: 'bonding company', fields: [['name', 'Name', 'text', true], ['phone', 'Phone', 'tel'], ['notes', 'Notes', 'text']] },
     doc: { one: 'form or document', fields: [['title', 'Title', 'text', true], ['url', 'Link', 'url', true], ['notes', 'Notes', 'text']] }
   };
+  const MISD_DAYS = 60;   // misdemeanor cases are set within 60 days of arrest
+  const infoSpecKey = (r) => r.section === 'court' ? (r.data?.kind === 'misd' ? 'misd' : 'felony') : r.section;
+  const courtDay = (iso) => iso ? `${fmtDay(iso)} ${fmtShort(iso)}` : '';
+  const courtTime = (t) => t ? new Date(`2000-01-01T${t}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
   const telLink = (p) => {
     const digits = String(p || '').replace(/[^\d+]/g, '');
     return digits ? `<a href="tel:${esc(digits)}">${esc(p)}</a>` : esc(p || '');
@@ -2663,10 +2669,11 @@
     const nextUp = oncall.find((r) => sd(r) > today);
     const oncallUpcoming = oncall.filter((r) => ed(r) >= today);
     const oncallPast = oncall.filter((r) => ed(r) < today).reverse().slice(0, 10);
-    const courtKey = (r) => `${d(r, 'date')}T${d(r, 'time') || '00:00'}`;
-    const court = by('court').sort((a, b) => courtKey(a).localeCompare(courtKey(b)));
-    const courtUpcoming = court.filter((r) => d(r, 'date') >= today);
-    const courtPast = court.filter((r) => d(r, 'date') < today).reverse().slice(0, 20);
+    const court = by('court').sort((a, b) => d(a, 'date').localeCompare(d(b, 'date')));
+    const felony = court.filter((r) => d(r, 'kind') !== 'misd'), misd = court.filter((r) => d(r, 'kind') === 'misd');
+    const upcoming = (list) => list.filter((r) => d(r, 'date') >= today);
+    const past = (list) => list.filter((r) => d(r, 'date') < today).reverse();
+    const nextCourt = upcoming(court)[0];
     const bonds = by('bond').sort(byText('charge')), bondsmen = by('bondsman').sort(byText('name'));
     const docs = by('doc').sort(byText('title'));
 
@@ -2688,8 +2695,10 @@
 
     const oncallCells = (r) => `<td><strong>${esc(d(r, 'name'))}</strong>${r === onNow ? ' <span class="chip">On call now</span>' : ''}</td>
       <td>${esc(oncallDay(d(r, 'start')))}</td><td>${esc(oncallDay(d(r, 'end')))}</td><td>${esc(d(r, 'notes'))}</td>`;
-    const courtCells = (r) => `<td>${d(r, 'date') ? `${esc(fmtDay(d(r, 'date')))} ${esc(fmtShort(d(r, 'date')))}` : ''}</td><td>${d(r, 'time') ? esc(new Date(`2000-01-01T${d(r, 'time')}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) : ''}</td>
-      <td>${esc(d(r, 'court'))}</td><td>${esc(d(r, 'where'))}</td><td>${esc(d(r, 'notes'))}</td>`;
+    const felonyCells = (r) => `<td>${esc(fmtShort(d(r, 'from')))} – ${esc(fmtShort(d(r, 'to')))}</td>
+      <td><strong>${esc(courtDay(d(r, 'date')))}</strong>${r === nextCourt ? ' <span class="chip">Next</span>' : ''}</td><td>${esc(courtTime(d(r, 'time')))}</td><td>${esc(d(r, 'notes'))}</td>`;
+    const misdCells = (r) => `<td><strong>${esc(courtDay(d(r, 'date')))}</strong>${r === nextCourt ? ' <span class="chip">Next</span>' : ''}</td><td>${esc(courtTime(d(r, 'time')))}</td><td>${esc(d(r, 'notes'))}</td>`;
+    const FEL_HEAD = ['Arrest date between', 'Court date', 'Time', 'Notes'], MISD_HEAD = ['Court date', 'Time', 'Notes'];
 
     el.innerHTML = `
       <nav class="info-jump" aria-label="Jump to">
@@ -2709,9 +2718,24 @@
         ${updated('oncall')}
       </section>
       <section class="card" id="info-court">
-        <div class="card-head"><h2>Court calendar</h2>${addBtn('court', '+ Add court date')}</div>
-        ${table(['Date', 'Time', 'Court / case', 'Where', 'Notes'], courtUpcoming, courtCells, 'No upcoming court dates.')}
-        ${courtPast.length ? `<details class="fold"><summary><h3>Past court dates</h3></summary>${table(['Date', 'Time', 'Court / case', 'Where', 'Notes'], courtPast, courtCells, '')}</details>` : ''}
+        <div class="card-head"><h2>District court settings</h2></div>
+        <div class="court-find">
+          <h3>Find the court date for an arrest</h3>
+          <div class="court-find-row">
+            <label>Arrest date<input type="date" id="cf-date" value="${today}"></label>
+            <div class="cf-seg" role="group" aria-label="Case type">
+              <button type="button" class="cf-btn on" data-cf="felony">Felony</button><button type="button" class="cf-btn" data-cf="misd">Misdemeanor</button>
+            </div>
+          </div>
+          <div id="cf-out" class="court-find-out" aria-live="polite"></div>
+        </div>
+        <div class="card-head info-sub"><h3>Felony cases</h3>${addBtn('felony', '+ Add setting')}</div>
+        ${table(FEL_HEAD, upcoming(felony), felonyCells, 'No upcoming felony court dates.')}
+        ${past(felony).length ? `<details class="fold"><summary><h3>Earlier felony settings</h3></summary>${table(FEL_HEAD, past(felony), felonyCells, '')}</details>` : ''}
+        <div class="card-head info-sub"><h3>Misdemeanor cases</h3>${addBtn('misd', '+ Add date')}</div>
+        <p class="hint" style="margin-top:0">Misdemeanor cases should be set within ${MISD_DAYS} days of arrest.</p>
+        ${table(MISD_HEAD, upcoming(misd), misdCells, 'No upcoming misdemeanor court dates.')}
+        ${past(misd).length ? `<details class="fold"><summary><h3>Earlier misdemeanor dates</h3></summary>${table(MISD_HEAD, past(misd), misdCells, '')}</details>` : ''}
         ${updated('court')}
       </section>
       <section class="card" id="info-bonds">
@@ -2745,8 +2769,28 @@
     $$('.info-jump a', el).forEach((a) => {
       a.onclick = (e) => { e.preventDefault(); $(a.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
     });
+    // Court date lookup: felony → the setting whose arrest dates cover it; misdemeanor → dates within 60 days after the arrest
+    let cfKind = 'felony';
+    const findCourt = () => {
+      const a = $('#cf-date').value, out = $('#cf-out');
+      if (!a) { out.innerHTML = ''; return; }
+      const when = (r) => `<strong>${esc(courtDay(d(r, 'date')))}</strong>${d(r, 'time') ? ` at ${esc(courtTime(d(r, 'time')))}` : ''}`;
+      if (cfKind === 'felony') {
+        const r = felony.find((x) => d(x, 'from') <= a && a <= d(x, 'to'));
+        out.innerHTML = r ? `Felony court date: ${when(r)}${d(r, 'notes') ? ` <span class="hint">· ${esc(d(r, 'notes'))}</span>` : ''}`
+          : '<span class="hint">No felony setting on the schedule covers that arrest date.</span>';
+      } else {
+        const last = isoDate(addDays(parseDate(a), MISD_DAYS));
+        const fits = misd.filter((x) => d(x, 'date') > a && d(x, 'date') <= last);
+        out.innerHTML = fits.length ? `Misdemeanor court ${fits.length > 1 ? 'dates' : 'date'} within ${MISD_DAYS} days (by ${esc(fmtShort(last))}): ${fits.map(when).join(' or ')}`
+          : `<span class="hint">No misdemeanor date on the schedule is within ${MISD_DAYS} days of that arrest (by ${esc(fmtShort(last))}).</span>`;
+      }
+    };
+    $('#cf-date').oninput = findCourt;
+    $$('[data-cf]', el).forEach((b) => { b.onclick = () => { cfKind = b.dataset.cf; $$('[data-cf]', el).forEach((x) => x.classList.toggle('on', x === b)); findCourt(); }; });
+    findCourt();
     if (!mgr) return;
-    $$('[data-info-edit]', el).forEach((b) => { b.onclick = () => { const r = rows.find((x) => x.id === b.dataset.infoEdit); editInfo(r.section, r); }; });
+    $$('[data-info-edit]', el).forEach((b) => { b.onclick = () => { const r = rows.find((x) => x.id === b.dataset.infoEdit); editInfo(infoSpecKey(r), r); }; });
     $$('[data-info-add]', el).forEach((b) => {
       b.onclick = () => {
         const sec = b.dataset.infoAdd;
@@ -2756,7 +2800,8 @@
           const last = oncall[oncall.length - 1];
           prefill.start = last && ed(last) >= today ? isoDate(addDays(parseDate(sd(last)), 7)) : oncallWed(today);
         }
-        if (sec === 'court') prefill.date = today;
+        // A new felony setting picks up the day after the last one's arrest dates
+        if (sec === 'felony') { const last = felony[felony.length - 1]; prefill.time = '09:00'; if (last) prefill.from = isoDate(addDays(parseDate(d(last, 'to')), 1)); }
         editInfo(sec, { data: prefill });
       };
     });
@@ -2790,7 +2835,9 @@
         spec.fields.forEach(([k]) => { const x = f[k].value.trim(); if (x) data[k] = x; });
         if (sec === 'oncall') { data.start = oncallWed(data.start); data.end = isoDate(addDays(parseDate(data.start), 6)); }
         if (sec === 'doc' && !safeUrl(data.url)) throw new Error('The link has to start with https://');
-        const q = r.id ? sb.from('info_rows').update({ data }).eq('id', r.id) : sb.from('info_rows').insert({ section: sec, data });
+        if (spec.kind) data.kind = spec.kind;
+        if (sec === 'felony' && data.to < data.from) throw new Error('“Arrested through” has to be on or after “Arrested from”.');
+        const q = r.id ? sb.from('info_rows').update({ data }).eq('id', r.id) : sb.from('info_rows').insert({ section: spec.section || sec, data });
         const res = await q;
         if (res.error) throw res.error;
         closeModal(); toast('Saved.'); showView('info');
