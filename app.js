@@ -1934,13 +1934,12 @@
           : '<span class="hint">No one off</span>'}</div>
       </li>`).join('')}</ul>
       <p class="hint wo-key">Approved vacation, sick and comp time. Pending requests are shown dashed. Tap a name to open the request.</p>`;
-    $$('[data-wo]', box).forEach((b) => {
-      b.onclick = async () => {
-        const { data: r, error: e } = await sb.from('time_off_requests').select('*').eq('id', b.dataset.wo).single();
-        if (e) return toast(e.message, true);
-        openTimeOff(r);
-      };
-    });
+    $$('[data-wo]', box).forEach((b) => { b.onclick = () => openOffRequest(b.dataset.wo); });
+  }
+  async function openOffRequest(id) {
+    const { data: r, error } = await sb.from('time_off_requests').select('*').eq('id', id).single();
+    if (error) return toast(error.message, true);
+    openTimeOff(r);
   }
 
   // Who still owes a timesheet: last pay period (once it's over), and the current one on its last day
@@ -2241,6 +2240,28 @@
     Object.values(byDay).forEach((list) => list.sort((x, y) =>
       (y.kind === 'holiday') - (x.kind === 'holiday') || (y.all_day ? 1 : 0) - (x.all_day ? 1 : 0) || x.starts_at.localeCompare(y.starts_at)));
 
+    // Managers also see who's off each day (approved and pending vacation, sick and comp)
+    const offByDay = {};
+    if (isManager() && !state.calMine) {
+      const offR = await sb.from('time_off_requests').select('id, user_id, type, start_date, end_date, status')
+        .in('status', ['approved', 'pending']).neq('type', 'comp_earned').lte('start_date', isoDate(addDays(gridEnd, -1))).gte('end_date', isoDate(gridStart));
+      if (!offR.error) {
+        for (const r of offR.data) {
+          for (let d = parseDate(r.start_date > isoDate(gridStart) ? r.start_date : isoDate(gridStart)); isoDate(d) <= r.end_date && d < gridEnd; d = addDays(d, 1)) {
+            (offByDay[isoDate(d)] ||= []).push(r);
+          }
+        }
+        Object.values(offByDay).forEach((list) => list.sort((a, b) => (a.status === 'pending') - (b.status === 'pending') || personName(a.user_id).localeCompare(personName(b.user_id))));
+      }
+    }
+    const firstName = (id) => (personName(id, 'Unknown').split(' ')[0]);
+    const offLine = (iso) => {
+      const list = offByDay[iso];
+      if (!list) return '';
+      const shown = list.slice(0, 2).map((r) => esc(firstName(r.user_id)) + (r.status === 'pending' ? '?' : '')).join(', ');
+      return `<button class="cal-off" data-off="${iso}" title="Who’s off">Off: ${shown}${list.length > 2 ? ` +${list.length - 2}` : ''}</button>`;
+    };
+
     const annCard = (x) => `<article class="ann ${x.pinned ? 'pinned' : ''} ann-${x.kind}">
         <div class="ann-head">
           ${x.kind === 'training' ? '<span class="tag tag-training">Training</span>' : ''}${x.pinned ? '<span class="tag tag-pin">Pinned</span>' : ''}
@@ -2267,7 +2288,7 @@
             <button class="btn small" id="cal-next" aria-label="Next month">›</button>
             <button class="btn small" id="cal-today">Today</button>
           </div>
-          <div class="cal-legend"><span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="ev-dot ev-personal"></span>My events</span>${on('offduty') ? '<span class="lg"><span class="ev-dot ev-offduty"></span>Off-duty jobs</span>' : ''}<span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
+          <div class="cal-legend">${isManager() && !state.calMine ? '<span class="lg"><span class="ev-dot ev-off"></span>Who’s off</span>' : ''}<span class="lg"><span class="ev-dot ev-training"></span>Training</span><span class="lg"><span class="ev-dot ev-court"></span>Court</span><span class="lg"><span class="ev-dot ev-holiday"></span>Holiday</span><span class="lg"><span class="ev-dot ev-other"></span>Other</span><span class="lg"><span class="ev-dot ev-personal"></span>My events</span>${on('offduty') ? '<span class="lg"><span class="ev-dot ev-offduty"></span>Off-duty jobs</span>' : ''}<span class="lg"><span class="mine-dot"></span>You’re on it</span></div>
           <div class="cal-tools">
             ${isManager() ? `<div class="seg-toggle" role="group" aria-label="Whose events">
               <button class="${state.calMine ? '' : 'on'}" data-calmine="0">Everyone’s</button><button class="${state.calMine ? 'on' : ''}" data-calmine="1">Just mine</button>
@@ -2282,6 +2303,7 @@
             const evs = byDay[iso] || [];
             return `<div class="cal-day ${d.getMonth() !== m.getMonth() ? 'other-month' : ''} ${iso === today ? 'is-today' : ''} ${evs.some(mine) ? 'has-mine' : ''}" data-day="${iso}">
               <div class="cal-num">${d.getDate()}${evs.some(mine) ? '<span class="mine-dot" title="You’re on an event this day"></span>' : ''}</div>
+              ${offLine(iso)}
               ${evs.slice(0, 3).map((e) => `<button class="ev ev-${e.kind} ${mine(e) ? 'ev-is-mine' : ''}" data-ev="${e.id}" title="${esc(e.title)}">${mine(e) ? '<span class="mine-dot"></span>' : ''}${e.all_day ? '' : `<span class="ev-time">${esc(fmtTime(e.starts_at).replace(':00', '').replace(' ', '').toLowerCase())}</span> `}${esc(e.title)}</button>`).join('')}
               ${evs.length > 3 ? `<button class="ev-more" data-more="${iso}">+${evs.length - 3} more</button>` : ''}
             </div>`;
@@ -2301,14 +2323,15 @@
 
     const evById = Object.fromEntries(allEv.map((e) => [e.id, e]));
     $$('[data-ev]', el).forEach((b) => { b.onclick = () => openEvent(evById[b.dataset.ev], tags[b.dataset.ev] || [], people); });
-    $$('[data-more]', el).forEach((b) => { b.onclick = (ev) => { ev.stopPropagation(); openDay(b.dataset.more, byDay[b.dataset.more], tags, people); }; });
+    $$('[data-more]', el).forEach((b) => { b.onclick = (ev) => { ev.stopPropagation(); openDay(b.dataset.more, byDay[b.dataset.more], tags, people, offByDay[b.dataset.more]); }; });
+    $$('[data-off]', el).forEach((b) => { b.onclick = (ev) => { ev.stopPropagation(); openDay(b.dataset.off, byDay[b.dataset.off] || [], tags, people, offByDay[b.dataset.off]); }; });
     // On phones the events are just colored bars, so tapping anywhere in a day opens that day
     $$('.cal-day', el).forEach((d) => {
       d.onclick = (ev) => {
-        const evs = byDay[d.dataset.day];
-        if (!evs || !window.matchMedia('(max-width: 760px)').matches) return;
+        const evs = byDay[d.dataset.day], offs = offByDay[d.dataset.day];
+        if ((!evs && !offs) || !window.matchMedia('(max-width: 760px)').matches) return;
         ev.preventDefault(); ev.stopPropagation();
-        openDay(d.dataset.day, evs, tags, people);
+        openDay(d.dataset.day, evs || [], tags, people, offs);
       };
     });
     $('#cal-prev').onclick = () => { state.month = new Date(m.getFullYear(), m.getMonth() - 1, 1); showView('calendar'); };
@@ -2326,11 +2349,16 @@
     }
   };
 
-  function openDay(iso, evs, tags, people) {
-    openModal(`<h2>${esc(fmtDate(iso))}</h2><ul class="agenda">${evs.map((e) => `<li>
+  function openDay(iso, evs, tags, people, offs = []) {
+    const offType = (r) => (r.type === 'comp' ? 'Comp' : typeLabel(r.type)) + (r.status === 'pending' ? ' · pending' : '');
+    openModal(`<h2>${esc(fmtDate(iso))}</h2>
+      ${offs?.length ? `<h3 class="day-off-h">Who’s off</h3><div class="wo-people day-off">${offs.map((r) => `<button type="button" class="wo-chip${r.status === 'pending' ? ' pending' : ''}" data-wo="${r.id}"
+        title="${esc(dateRange(r.start_date, r.end_date))}">${esc(personName(r.user_id, 'Unknown'))} <span>${esc(offType(r))}</span></button>`).join('')}</div>` : ''}
+      ${evs.length ? `${offs?.length ? '<h3 class="day-off-h">Events</h3>' : ''}<ul class="agenda">${evs.map((e) => `<li>
       <button class="agenda-item" data-ev="${e.id}"><span class="tag tag-${e.kind}">${esc(evLabel(e))}</span>
-      <span class="agenda-title">${esc(e.title)}</span><span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</span></button></li>`).join('')}</ul>
+      <span class="agenda-title">${esc(e.title)}</span><span class="muted agenda-when">${esc(fmtWhen(e.starts_at, e.ends_at, e.all_day))}</span></button></li>`).join('')}</ul>` : ''}
       <div class="actions"><button class="btn small" id="day-my-ev">Add my event this day</button></div>`);
+    $$('#modal-body [data-wo]').forEach((b) => { b.onclick = () => openOffRequest(b.dataset.wo); });
     $$('#modal-body [data-ev]').forEach((b) => { b.onclick = () => openEvent(evs.find((e) => e.id === b.dataset.ev), tags[b.dataset.ev] || [], people); });
     $('#day-my-ev').onclick = () => editPersonal({ starts_at: fromLocalInput(iso, '09:00') });
   }

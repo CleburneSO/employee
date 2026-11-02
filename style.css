@@ -1136,3 +1136,14 @@ main + .site-foot { margin-top: -1.5rem; }
 @media (max-width: 520px) {
   .wo-day { grid-template-columns: 1fr; gap: .3rem; }
 }
+/* Calendar: who's off line (managers) */
+.cal-off { display: block; width: 100%; text-align: left; border: 1px dashed #9aa3b2; background: #f6f7f9; color: #475467; border-radius: 4px;
+  padding: 0 4px; margin-bottom: 2px; font: inherit; font-size: .72rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.cal-off:hover { border-color: var(--primary); }
+.ev-dot.ev-off { background: #f6f7f9; border: 1px dashed #9aa3b2; }
+:root[data-theme="dark"] .cal-off, :root[data-theme="dark"] .ev-dot.ev-off { background: #23272e; border-color: #5b6472; color: #c5ccd6; }
+.day-off-h { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: .6rem 0 .4rem; }
+.day-off { margin-bottom: .5rem; }
+@media screen and (max-width: 760px) {
+  .cal-off { font-size: 0; height: 6px; padding: 0; border-radius: 3px; pointer-events: none; }
+}

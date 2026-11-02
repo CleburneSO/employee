@@ -80,6 +80,7 @@ Invite each person from **Authentication → Users → Invite user**. They set a
 
 **Who's off (Admin home)**
 - Managers (clerks too) see **Who's off** on the Admin home: each day in the next two weeks that someone is off, with their name and Vacation / Sick / Comp. Pending requests show dashed so nothing is missed; denied and cancelled ones don't show. Pick another start date to look ahead. Tap a name to open the request.
+- The **Calendar** shows it too, for managers on **Everyone's**: a dashed "Off: Amy, Bob +1" line on each day (a ? after a name means still pending). Click it, or tap the day on a phone, to see everyone off that day; tap a name to open the request.
 
 **Info (everyone; Sheriff's Office)**
 - One page of reference info: **Investigator on call** (who's on call right now, until when, and who's next, plus the schedule), **District court settings** (felony cases go by arrest-date range; misdemeanors are set within 60 days of arrest) with a **Find the court date for an arrest** lookup: enter the arrest date, pick Felony or Misdemeanor, and it shows the court date(s). The 2026 dates are loaded by running `court-2026.sql` once in the Sheriff's Office Supabase project, the **Bond schedule** (grouped like the court's 2/28/25 administrative order, with its rules at the top, "No bond" in red, and a search box; load it by running `bonds-2025.sql` once), and **Forms & documents** (links that open in a new tab — e.g. a shared Google Drive or county website file). Each section shows when it was last updated and by whom.
