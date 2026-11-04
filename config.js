@@ -25,6 +25,7 @@ window.APP_CONFIG = {
   OTHER_PORTAL: { label: 'Jail portal', url: 'jail/' },
 
   // Turn parts of the portal on or off. Patrol stats are off for now — the code is
-  // still there; change stats to true to bring the Stats tab back.
-  FEATURES: { stats: false, shifts: true, info: true }
+  // still there; change stats to true to bring the Stats tab back. The Info tab (on-call, court
+  // dates, bonds, forms) is built but hidden until it's ready; change info to true to show it.
+  FEATURES: { stats: false, shifts: true, info: false }
 };
