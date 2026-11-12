@@ -10,6 +10,10 @@ A free/low-cost employee portal:
 - **Manager tools:** approval queue, printable signed timesheets, CSV export for payroll, team/role management
 - Signed timesheets are locked once approved, and the database (not just the web page) enforces who can see and change what
 
+## Look and layout
+
+`theme.css` (loaded after `style.css`) is the portal's design system: colors, type (Inter), spacing, buttons, forms, tables, status badges, pop-ups and messages, in a dark theme by default (anyone can switch to light with the sun/moon button). It only affects the screen: printed timesheets, forms and logs keep their paper layout. Pages are reached from a sidebar grouped into **My work**, **Records** and **Administration** (managers); it collapses to icons on a computer and slides in from the ☰ button on phones. The account menu (top right) shows who's signed in and has **Sign out**.
+
 ## Files
 
 | File | What it is |
