@@ -1156,3 +1156,11 @@ table.entry tr.is-leave .t-hours::after { content: ' *'; color: #3a5ea8; }
   table.entry tr.is-leave td { background: transparent; }
   :root[data-theme="dark"] table.entry tr.is-leave { background: #1f2836; }
 }
+/* Timesheet on a phone: a block with times shows its type dropdown (Regular, Vacation, Sick…); the note stays behind ✎ */
+@media screen and (max-width: 760px) {
+  table.entry tr.has-time:not(.note-open) td.expl-cell { display: block; }
+  table.entry tr.has-time:not(.note-open) .t-expl { display: none; }
+  table.entry tr.has-time:not(.note-open) .expl-wrap .t-type { max-width: none; width: 100%; }
+  table.entry tr.seg-extra td.day { justify-content: flex-start; gap: .25rem; }
+}
+table.entry tr.seg-extra td.day .add-seg { margin-left: 0; }

@@ -738,7 +738,7 @@
     return `<tr class="seg ${first ? 'seg-first' : 'seg-extra'}" data-date="${iso}" data-label="${esc(fmtShort(iso))}">
       <td class="day">${first
         ? `<span class="d-date"><span class="d-wd">${esc(fmtDay(iso))}</span> <strong>${esc(monthDay(iso))}</strong></span><button type="button" class="add-seg" title="Add another block of time on this day" aria-label="Add time on ${esc(fmtShort(iso))}">+</button>`
-        : `<span class="seg-more">↳ more</span><button type="button" class="del-seg" title="Remove this block of time" aria-label="Remove this time">✕</button>`}</td>
+        : `<button type="button" class="add-seg" title="Add another block of time on this day" aria-label="Add more time on ${esc(fmtShort(iso))}">+</button><button type="button" class="del-seg" title="Remove this block of time" aria-label="Remove this time">✕</button>`}</td>
       <td>${timeSelect('t-in', e.in || '', 'Time in', true)}</td>
       <td>${timeSelect('t-out', e.out || '', 'Time out', true)}</td>
       <td class="num t-hours"></td>
@@ -778,6 +778,7 @@
       $('.t-hours', tr).textContent = h ? hrs(h) : '';
       tr.classList.toggle('is-duty', !!type && !leave);
       tr.classList.toggle('is-leave', !!leave);
+      tr.classList.toggle('has-time', !!h || tr.classList.contains('seg-extra'));
       // on a phone the note box stays tucked away until it's needed
       if (type || $('.t-expl', tr).value) tr.classList.add('note-open');
       if (leave) leaveSum[leave[2]] += round2(h);
