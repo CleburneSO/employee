@@ -1164,3 +1164,37 @@ table.entry tr.is-leave .t-hours::after { content: ' *'; color: #3a5ea8; }
   table.entry tr.seg-extra td.day { justify-content: flex-start; gap: .25rem; }
 }
 table.entry tr.seg-extra td.day .add-seg { margin-left: 0; }
+
+/* ===================== Classic look: a plain, official county-site style =====================
+   Solid green menu bar, the U.S. government's Public Sans font, square corners, plain table headings. */
+:root { --radius: 4px; }
+body { font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.topbar { border-bottom: 0; }
+.tabs-wrap { background: var(--primary-dark); border-bottom: 4px solid var(--gold); }
+.tabs-wrap .tabs { background: transparent; padding: 0 .75rem; gap: 0; }
+.tabs button { color: #e6ebdd; border-bottom: 0; padding: .7rem 1rem; border-radius: 0; font-weight: 600; }
+.tabs button:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+.tabs button.active { color: #fff; background: var(--primary); }
+.tabs .tab-count { background: var(--gold); color: #1d2330; }
+.menu-toggle { color: #fff; }
+.menu-icon, .menu-caret { color: #fff; }
+.btn { border-radius: 4px; }
+.card { box-shadow: none; }
+.card > h2:first-child, .card > .card-head:first-child { border-bottom: 1px solid var(--line); padding-bottom: .55rem; margin-bottom: .9rem; }
+th { text-transform: none; letter-spacing: 0; font-size: .85rem; font-weight: 700; color: var(--text); background: #f2f4ef; }
+.chip, .tag, .role, .badge, .count, .wo-chip, .info-jump a, .portal-label, .cf-seg, .seg-toggle, .seg-toggle button { border-radius: 3px; }
+.tag, .tile-head, .pf-tile-title, .stat-label, .day-off-h, .cal-dow, .tab-group-label, .bond-table tr.info-group td { text-transform: none; letter-spacing: 0; }
+.tile-head { font-size: 1rem; color: var(--text); }
+.tag { font-size: .75rem; }
+.page-head p { display: none; }   /* page titles only, no subtitle under each */
+.page-head h1 { font-size: 1.35rem; }
+@media screen and (max-width: 760px) {
+  .tabs-wrap .tabs { border-top: 1px solid rgba(255, 255, 255, .15); padding: .25rem 0; }
+  .tabs-wrap .tabs button { color: #e6ebdd; border-left: 4px solid transparent; }
+  .tabs-wrap .tabs button.active { background: var(--primary); border-left-color: var(--gold); color: #fff; }
+  .tab-group-label { color: #c9d1bd; border-top-color: rgba(255, 255, 255, .15); }
+  table.list td[data-label]::before, table.list td::before { text-transform: none; letter-spacing: 0; }
+}
+:root[data-theme="dark"] .tabs-wrap, :root[data-theme="dark"] .tabs { background: #1e2618; }
+:root[data-theme="dark"] .tabs button.active { background: #33401f; }
+:root[data-theme="dark"] th { background: #20252c; }
