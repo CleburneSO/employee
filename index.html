@@ -4,12 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cleburne County Sheriff's Office — Employee Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="style.css?v=20261112a">
+  <link rel="stylesheet" href="theme.css?v=20261112a">
   <script>
-    // Light / dark: the person's choice if they made one, otherwise their device's setting
+    // Light / dark: the person's choice if they made one; dark otherwise
     (function () {
       var t = null; try { t = localStorage.getItem('portal_theme'); } catch (e) {}
-      if (t !== 'dark' && t !== 'light') t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      if (t !== 'dark' && t !== 'light') t = 'dark';
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>

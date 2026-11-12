@@ -31,6 +31,8 @@
   const FIRST_PERIOD = cfg.FIRST_PAY_PERIOD || '2026-10-01';
   const PERIOD_ANCHOR = FIRST_PERIOD;
   const LOGO = cfg.LOGO === undefined ? 'logo.png' : cfg.LOGO;   // '' = no logo
+  // The round seal (sidebar, sign-in): the page's icon, so the jail portal finds it one folder up
+  const SEAL = document.querySelector('link[rel="icon"]')?.getAttribute('href') || 'seal.png';
   // Logo image; hides itself if the file isn't there
   const logoImg = (cls) => LOGO
     ? `<img src="${esc(LOGO)}" alt="${esc(ORG)}" class="${cls}" onerror="this.remove()">`
@@ -360,21 +362,32 @@
 
   function renderLogin(mode = 'login') {
     const reset = mode === 'reset';
-    app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">
-      ${logoImg('auth-logo')}
-      <h1 class="auth-org">${esc(ORG)}</h1>
-      ${PORTAL_LABEL ? `<p class="portal-label-auth">${esc(PORTAL_LABEL)} portal</p>` : ''}
-      ${signedOutForIdle && !reset ? `<div class="notice">You were signed out after ${Math.round(IDLE_MS / 60000)} minutes of inactivity.</div>` : ''}
-      <p class="auth-title">Employee Portal</p>
-      <p class="muted">${reset ? 'Enter your email and we’ll send you a reset link.' : 'Sign in to your account.'}</p>
-      <form id="auth-form">
-        <label>Email<input type="email" name="email" required autocomplete="email"></label>
-        ${reset ? '' : '<label>Password<input type="password" name="password" required autocomplete="current-password"></label>'}
-        <button class="btn primary block" type="submit">${reset ? 'Send reset link' : 'Sign in'}</button>
-      </form>
-      <button class="btn-link" id="toggle-mode">${reset ? 'Back to sign in' : 'Forgot password?'}</button>
-      <p class="auth-legal">Authorized personnel only. Activity on this site is recorded.</p>
-    </div>${footerHTML()}</div>`;
+    app.innerHTML = `<div class="auth-wrap auth-split">
+      <section class="auth-brand" aria-hidden="true">
+        <img src="${esc(SEAL)}" alt="" class="auth-seal" onerror="this.remove()">
+        <div class="auth-brand-name">${esc(orgParts().join(' '))}</div>
+        <div class="auth-brand-sub">Employee Portal${PORTAL_LABEL ? ` · ${esc(PORTAL_LABEL)}` : ''}</div>
+        <ul class="auth-brand-list"><li>${icon('clock')}Timesheets &amp; time off</li><li>${icon('calendar')}Schedules &amp; announcements</li><li>${icon('shield')}Secure, recorded access</li></ul>
+      </section>
+      <div class="auth-side">
+        <div class="card auth-card">
+          ${logoImg('auth-logo')}
+          <h1 class="auth-org">${esc(ORG)}</h1>
+          ${PORTAL_LABEL ? `<p class="portal-label-auth">${esc(PORTAL_LABEL)} portal</p>` : ''}
+          <h2 class="auth-h">${reset ? 'Reset your password' : 'Sign in'}</h2>
+          <p class="muted auth-sub">${reset ? 'Enter your email and we’ll send you a reset link.' : 'Use your portal email and password.'}</p>
+          ${signedOutForIdle && !reset ? `<div class="notice">${icon('lock')}<span>You were signed out after ${Math.round(IDLE_MS / 60000)} minutes of inactivity.</span></div>` : ''}
+          <form id="auth-form">
+            <label>Email<input type="email" name="email" required autocomplete="email" placeholder="name@example.com"></label>
+            ${reset ? '' : '<label>Password<input type="password" name="password" required autocomplete="current-password"></label>'}
+            <button class="btn primary block" type="submit">${reset ? 'Send reset link' : 'Sign in'}</button>
+          </form>
+          <button class="btn-link" id="toggle-mode">${reset ? 'Back to sign in' : 'Forgot password?'}</button>
+          <p class="auth-legal">${icon('lock')}Authorized personnel only. Activity on this site is recorded.</p>
+        </div>
+        ${footerHTML()}
+      </div>
+    </div>`;
     signedOutForIdle = false;
     $('#toggle-mode').onclick = () => renderLogin(reset ? 'login' : 'reset');
     $('#auth-form').onsubmit = (e) => {
@@ -460,14 +473,13 @@
   /* ---------------- light / dark ---------------- */
   const THEME_KEY = 'portal_theme';
   const savedTheme = () => { try { const t = localStorage.getItem(THEME_KEY); return t === 'dark' || t === 'light' ? t : null; } catch (_) { return null; } };
-  const deviceTheme = () => (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   const currentTheme = () => document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
   function setTheme(t, save) {
     document.documentElement.setAttribute('data-theme', t);
     if (save) { try { localStorage.setItem(THEME_KEY, t); } catch (_) { /* private mode */ } }
     const b = $('#theme-toggle');
     if (b) {
-      b.textContent = t === 'dark' ? '☀' : '☾';
+      b.innerHTML = icon(t === 'dark' ? 'sun' : 'moon');
       b.title = b.ariaLabel = t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
     }
   }
@@ -476,53 +488,123 @@
     $('#theme-toggle').onclick = () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark', true);
   }
   // Set the theme right away (in case an older index.html without the early script is cached)
-  setTheme(savedTheme() || deviceTheme(), false);
-  // Until someone picks, follow the device as it switches between light and dark
-  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (!savedTheme()) setTheme(deviceTheme(), false); });
+  setTheme(savedTheme() || 'dark', false);   // dark is the portal's look; anyone can switch to light
+
+  /* ---------------- icons ---------------- */
+  // One consistent line-icon set (24×24, drawn with strokes) used across the app
+  const ICON_PATHS = {
+    calendar: '<rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+    plane: '<path d="M3 13.5l7-2V5a2 2 0 0 1 4 0v6.5l7 2v2l-7-1.5V19l2.5 1.5V22L12 21l-4.5 1v-1.5L10 19v-5l-7 1.5z"/>',
+    shirt: '<path d="M8 3l-5 3 2 5 2-1v11h10V10l2 1 2-5-5-3a4 4 0 0 1-8 0z"/>',
+    hash: '<path d="M5 9h15M4 15h15M10 3L8 21M16 3l-2 18"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12.5h18"/>',
+    chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/>',
+    home: '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+    check: '<path d="M4 12.5l5 5L20 6.5"/>',
+    inbox: '<path d="M3 13l3-8h12l3 8v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 13h5l1.5 2.5h5L16 13h5"/>',
+    file: '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6 6 0 0 1 3.5 5.5"/>',
+    box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+    menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
+    chevronLeft: '<path d="M15 18l-6-6 6-6"/>',
+    chevronDown: '<path d="M6 9l6 6 6-6"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+    shield: '<path d="M12 2.5l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10v-6z"/><path d="M9 12l2 2 4-4"/>',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+  };
+  const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[n] || ''}</svg>`;
 
   /* ---------------- app shell ---------------- */
   const views = {};
 
+  // Sidebar navigation, grouped; each item: [view, label, icon]
+  const SB_KEY = 'portal_sidebar';
+  function navGroups() {
+    const work = [['calendar', 'Calendar', 'calendar'], ...(on('info') ? [['info', 'Info', 'info']] : []),
+      ['timesheets', 'My Timesheets', 'clock'], ['timeoff', hasComp(state.profile) ? 'Time Off & Comp' : 'Time Off', 'plane'],
+      ...(on('uniforms') ? [['uniforms', 'Uniforms', 'shirt']] : [])];
+    const records = [...(on('cases') ? [['cases', 'Case Numbers', 'hash']] : []), ...(on('offduty') ? [['offduty', 'Off-Duty Jobs', 'briefcase']] : []),
+      ...(on('stats') && canSeeStats() ? [['stats', 'Stats', 'chart']] : [])];
+    const admin = isManager() ? [['adminhome', 'Dashboard', 'home'], ['review', 'Approvals', 'inbox'], ['payroll', 'Payroll', 'file'],
+      ['team', 'People', 'users'], ...(on('uniforms') ? [['uniadmin', 'Uniform Orders', 'box']] : []), ['settings', 'Settings', 'gear']] : [];
+    return [['My work', work], ['Records', records], ['Administration', admin]].filter(([, list]) => list.length);
+  }
+
+  // "CLEBURNE COUNTY SHERIFF'S OFFICE" → ["Cleburne County", "Sheriff's Office"]
+  const orgParts = () => {
+    const w = ORG.replace(/\b([A-Z])([A-Z']+)/g, (m, a, b) => a + b.toLowerCase()).replace(/'/g, '’').split(/\s+/);
+    return w.length > 2 ? [w.slice(0, 2).join(' '), w.slice(2).join(' ')] : [w.join(' '), 'Employee Portal'];
+  };
   function renderShell() {
-    const tabs = [['calendar', 'Calendar'], ...(on('info') ? [['info', 'Info']] : []), ['timesheets', 'My Timesheets'], ['timeoff', hasComp(state.profile) ? 'Time Off & Comp' : 'Time Off']];
-    if (on('uniforms')) tabs.push(['uniforms', 'Uniforms']);
-    if (on('cases')) tabs.push(['cases', 'Case Numbers']);
-    if (on('stats') && canSeeStats()) tabs.push(['stats', 'Stats']);
-    if (on('offduty')) tabs.push(['offduty', 'Off-Duty Jobs']);
-    // Manager pages: one "Admin" tab that opens the Admin home; a row of links at the top of every admin page
-    if (isManager()) tabs.push(['adminhome', 'Admin']);
+    const groups = navGroups();
+    const items = groups.flatMap(([, list]) => list);
     state.adminViews = isManager() ? ['adminhome', 'review', 'payroll', 'team', 'uniadmin', 'settings', 'person', 'tsfor', ...(isOwner() ? ['audit'] : [])] : [];
-    if (!tabs.some(([k]) => k === state.view) && !state.adminViews.includes(state.view)) state.view = 'calendar';
-    const tabBtn = ([k, l]) => `<button type="button" data-view="${k}" data-label="${esc(l)}">${esc(l)}${k === 'adminhome' ? ' <span class="count tab-count" hidden></span>' : ''}</button>`;
+    if (!items.some(([k]) => k === state.view) && !state.adminViews.includes(state.view)) state.view = 'calendar';
+    const navBtn = ([k, l, ic]) => `<button type="button" class="nav-item" data-view="${k}" data-label="${esc(l)}" title="${esc(l)}">${icon(ic)}<span class="nav-text">${esc(l)}</span>${k === 'review' ? '<span class="count tab-count" hidden></span>' : ''}</button>`;
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(SB_KEY) === 'collapsed'; } catch (_) { /* private mode */ }
+    const p = state.profile;
 
     app.innerHTML = `
-      <header class="topbar">
-        <div class="brand">${logoImg('brand-logo')}<span>${esc(ORG)}</span>${PORTAL_LABEL ? `<b class="portal-label">${esc(PORTAL_LABEL)}</b>` : ''}</div>
-        <div class="user">
-          <span class="avatar" title="${esc(state.profile.full_name)}" aria-hidden="true">${esc(initialsOf(state.profile.full_name))}</span>
-          <span class="user-name">${esc(state.profile.full_name)}</span>
-          <span class="role">${esc(state.profile.role)}</span>
-          <button id="theme-toggle" class="theme-toggle" type="button"></button>
-          <button id="signout" class="btn-link light">Sign out</button>
+      <div class="shell${collapsed ? ' sb-collapsed' : ''}">
+        <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+          <div class="sb-brand">
+            <img src="${esc(SEAL)}" alt="" class="sb-seal" onerror="this.remove()">
+            <div class="sb-name"><strong>${esc(orgParts()[0])}</strong><span>${esc(orgParts()[1])}</span></div>
+          </div>
+          ${PORTAL_LABEL ? `<div class="sb-portal">${esc(PORTAL_LABEL)} portal</div>` : ''}
+          <nav class="tabs sb-nav" id="main-nav">
+            ${groups.map(([g, list]) => `<div class="nav-group"><div class="nav-label">${esc(g)}</div>${list.map(navBtn).join('')}</div>`).join('')}
+          </nav>
+          <button type="button" class="sb-collapse" id="sb-collapse" aria-label="Collapse menu" title="Collapse menu">${icon('chevronLeft')}<span class="nav-text">Collapse</span></button>
+        </aside>
+        <div class="sb-scrim" id="sb-scrim"></div>
+        <div class="main-col">
+          <header class="topbar">
+            <button type="button" class="icon-btn menu-toggle" id="menu-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">${icon('menu')}</button>
+            <div class="tb-crumb"><span class="tb-group"></span><span class="menu-current"></span></div>
+            <div class="tb-actions">
+              <button id="theme-toggle" class="icon-btn theme-toggle" type="button"></button>
+              <div class="user-menu">
+                <button type="button" class="user-btn" id="user-btn" aria-haspopup="true" aria-expanded="false">
+                  <span class="avatar" aria-hidden="true">${esc(initialsOf(p.full_name))}</span>
+                  <span class="user-meta"><span class="user-name">${esc(p.full_name)}</span><span class="role">${esc(isOwner() ? 'Site owner' : p.role === 'manager' ? 'Manager' : 'Employee')}</span></span>
+                  ${icon('chevronDown', 'user-caret')}
+                </button>
+                <div class="user-drop" id="user-drop" hidden>
+                  <div class="ud-head"><strong>${esc(p.full_name)}</strong><span>${esc(p.email || '')}</span></div>
+                  <button id="signout" class="ud-item" type="button">${icon('logout')}Sign out</button>
+                </div>
+              </div>
+            </div>
+          </header>
+          <div class="content">
+            <div id="page-head" class="page-head" hidden></div>
+            <div id="due" class="due-wrap"></div>
+            <nav id="adm-nav" class="adm-nav" hidden aria-label="Admin pages"></nav>
+            <main id="view"></main>
+          </div>
+          ${footerHTML()}
         </div>
-      </header>
-      <div class="tabs-wrap">
-        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="main-nav">
-          <span class="menu-icon" aria-hidden="true">☰</span><span class="menu-current"></span><span class="menu-caret" aria-hidden="true">▾</span>
-        </button>
-        <nav class="tabs" id="main-nav">${tabs.map(tabBtn).join('')}</nav>
-      </div>
-      <div id="page-head" class="page-head" hidden></div>
-      <div id="due" class="due-wrap"></div>
-      <nav id="adm-nav" class="adm-nav" hidden aria-label="Admin pages"></nav>
-      <main id="view"></main>
-      ${footerHTML()}`;
+      </div>`;
     $('#signout').onclick = () => sb.auth.signOut();
     bindThemeToggle();
     startIdleWatch();
-    $$('.tabs button[data-view]').forEach((b) => { b.onclick = () => { setMenuOpen(false); setAdminOpen(false); showView(b.dataset.view); }; });
-    $('.tab-group-toggle')?.addEventListener('click', () => setAdminOpen(!$('.tab-group').classList.contains('open')));
-    $('.menu-toggle').onclick = () => setMenuOpen(!$('.tabs-wrap').classList.contains('open'));
+    $$('.tabs button[data-view]').forEach((b) => { b.onclick = () => { setMenuOpen(false); showView(b.dataset.view); window.scrollTo(0, 0); }; });
+    $('#menu-toggle').onclick = (e) => { e.stopPropagation(); setMenuOpen(!$('.shell').classList.contains('nav-open')); };
+    $('#sb-scrim').onclick = () => setMenuOpen(false);
+    $('#sb-collapse').onclick = () => {
+      const c = !$('.shell').classList.contains('sb-collapsed');
+      $('.shell').classList.toggle('sb-collapsed', c);
+      try { localStorage.setItem(SB_KEY, c ? 'collapsed' : 'open'); } catch (_) { /* private mode */ }
+    };
+    const ub = $('#user-btn'), ud = $('#user-drop');
+    ub.onclick = (e) => { e.stopPropagation(); ud.hidden = !ud.hidden; ub.setAttribute('aria-expanded', !ud.hidden); };
     showView(state.view);
   }
 
@@ -540,7 +622,16 @@
     uniforms: ['Uniforms', 'Your uniform allowance and orders'],
     cases: ['Case Numbers', 'Reserve the next case number and search the log'],
     stats: ['Stats', 'Patrol stats by month'],
-    offduty: ['Off-Duty Jobs', 'Open off-duty work and your requests']
+    offduty: ['Off-Duty Jobs', 'Open off-duty work and your requests'],
+    adminhome: ['Dashboard', 'What needs your attention, who’s off, and where everything is'],
+    review: ['Approvals', 'Timesheets, time off and uniform orders waiting on a decision'],
+    payroll: ['Payroll', 'Print or export a pay period, past timesheets and time off'],
+    team: ['People', 'Everyone’s role, shift and balances. Select a name to open their profile.'],
+    uniadmin: ['Uniform Orders', 'Orders to place or receive, recent orders and allowances'],
+    settings: ['Settings', 'Invites, special duties, backups and the audit log'],
+    audit: ['Audit Log', 'Every change made in the portal, and who made it'],
+    person: ['Employee Profile', 'Their details, balances and records'],
+    tsfor: ['Timesheet', 'Filling out or fixing a timesheet for someone; they sign it']
   };
   function renderPageHead(v) {
     const ph = $('#page-head'); if (!ph) return;
@@ -555,24 +646,19 @@
     <div class="skel-card"><span></span><span class="short"></span></div></div>`;
 
   // Phone menu: the tab list drops down from the menu button; tap outside or Esc closes it
+  // Phones and tablets: the sidebar slides in from the left
   function setMenuOpen(open) {
-    const wrap = $('.tabs-wrap');
-    if (!wrap) return;
-    wrap.classList.toggle('open', open);
-    wrap.querySelector('.menu-toggle').setAttribute('aria-expanded', open);
+    const shell = $('.shell');
+    if (!shell) return;
+    shell.classList.toggle('nav-open', open);
+    $('#menu-toggle')?.setAttribute('aria-expanded', open);
   }
-  // Computer: the Admin tab opens a small drop-down of the manager pages
-  function setAdminOpen(open) {
-    const g = $('.tab-group');
-    if (!g) return;
-    g.classList.toggle('open', open);
-    $('.tab-group-toggle', g).setAttribute('aria-expanded', open);
-  }
+  const closeUserMenu = () => { const d = $('#user-drop'); if (d && !d.hidden) { d.hidden = true; $('#user-btn')?.setAttribute('aria-expanded', 'false'); } };
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('.tabs-wrap')) setMenuOpen(false);
-    if (!e.target.closest('.tab-group')) setAdminOpen(false);
+    if (!e.target.closest('.sidebar') && !e.target.closest('#menu-toggle')) setMenuOpen(false);
+    if (!e.target.closest('.user-menu')) closeUserMenu();
   });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMenuOpen(false); setAdminOpen(false); } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMenuOpen(false); closeUserMenu(); } });
 
   // How many things are waiting on this manager (shown on Admin and Approvals)
   async function refreshAdminCount() {
@@ -637,12 +723,15 @@
     state.view = v;
     refreshDue();
     const isAdmin = (state.adminViews || []).includes(v);
-    const tab = isAdmin ? 'adminhome' : v;
+    const tab = $(`.tabs button[data-view="${v}"]`) ? v : v === 'person' || v === 'tsfor' ? 'team' : v === 'audit' ? 'settings' : isAdmin ? 'adminhome' : v;
     $$('.tabs button[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === tab));
+    const activeBtn = $('.tabs button[data-view].active');
     const cur = $('.menu-current');
-    if (cur) cur.textContent = $('.tabs button[data-view].active')?.dataset.label || '';
+    if (cur) cur.textContent = (PAGE_HEADS[v] && v !== 'timeoff' ? PAGE_HEADS[v][0] : activeBtn?.dataset.label) || '';
+    const grp = $('.tb-group');
+    if (grp) grp.textContent = activeBtn?.closest('.nav-group')?.querySelector('.nav-label')?.textContent || '';
     renderAdminNav(isAdmin ? v : null);
-    renderPageHead(isAdmin ? null : v);
+    renderPageHead(v);
     refreshAdminCount();
     const el = $('#view');
     el.innerHTML = skeleton();
