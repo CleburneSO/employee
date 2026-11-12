@@ -932,6 +932,14 @@ begin
                                                        where pd.user_id = new.user_id and pd.duty_id = d.id)))) then
         raise exception 'One of your time blocks is marked with a special duty you are not assigned to.';
       end if;
+      -- A block can instead be marked as time off (vacation, sick or a floating holiday); those hours go on
+      -- the Vacation / Sick / Holiday lines, which the person fills in (the site adds them up for them)
+      if exists (
+        select 1 from jsonb_array_elements(new.entries) e
+        where coalesce(e->>'leave', '') <> ''
+          and (e->>'leave' not in ('vacation', 'sick', 'floating') or coalesce(e->>'duty_id', '') <> '')) then
+        raise exception 'A time block is marked with a type of time off the portal doesn''t know.';
+      end if;
 
       -- Duty lines that have time blocks are the total of those blocks
       new.duty_hours := coalesce((
@@ -957,11 +965,12 @@ begin
   end if;
 
   -- Totals are always calculated by the database, never trusted from the browser.
-  -- Hours worked = regular blocks only; blocks marked with a duty go on that duty's line.
+  -- Hours worked = regular blocks only; blocks marked with a duty go on that duty's line,
+  -- and blocks marked as time off go on the Vacation / Sick / Holiday lines.
   new.total_hours := coalesce((
     select sum(coalesce((e->>'hours')::numeric, 0))
     from jsonb_array_elements(coalesce(new.entries, '[]'::jsonb)) e
-    where coalesce(e->>'duty_id', '') = ''
+    where coalesce(e->>'duty_id', '') = '' and coalesce(e->>'leave', '') = ''
   ), 0);
   -- Capped people (e.g. 80 hours): regular + holiday + vacation + sick over the cap become Comp Time Earned
   new.cap_comp_hours := case when new.hours_cap is not null

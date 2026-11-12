@@ -1147,3 +1147,12 @@ main + .site-foot { margin-top: -1.5rem; }
 @media screen and (max-width: 760px) {
   .cal-off { font-size: 0; height: 6px; padding: 0; border-radius: 3px; pointer-events: none; }
 }
+/* Timesheet: blocks marked Vacation / Sick / Floating holiday */
+table.entry tr.is-leave td { background: #eef4ff; }
+table.entry tr.is-leave .t-hours::after { content: ' *'; color: #3a5ea8; }
+:root[data-theme="dark"] table.entry tr.is-leave td { background: #1f2836; }
+@media screen and (max-width: 760px) {
+  table.entry tr.is-leave { background: #eef4ff; border-radius: 6px; padding-left: .4rem; padding-right: .4rem; }
+  table.entry tr.is-leave td { background: transparent; }
+  :root[data-theme="dark"] table.entry tr.is-leave { background: #1f2836; }
+}

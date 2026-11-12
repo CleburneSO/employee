@@ -719,12 +719,19 @@
 
   // One row per block of time. A day can have several blocks (e.g. regular shift + Traffic OT).
   let segDuties = [];   // special duties this person can mark a block with
+  let leavePrev = null; // time-off block totals at the last recalc, so the Vacation/Sick/Holiday lines move with them
+  // Time off taken on a day: a block marked with one of these goes on that line at the bottom instead of Hours Worked
+  // (a floating holiday goes on the Holiday line). The select's value is 'leave:vacation' etc.
+  const LEAVE_TYPES = [['vacation', 'Vacation', 'vacation_hours'], ['sick', 'Sick', 'sick_hours'], ['floating', 'Floating holiday', 'holiday_hours']];
+  const leaveName = (k) => (LEAVE_TYPES.find(([x]) => x === k) || [k, 'Time off'])[1];
+  const entryType = (e) => (e.leave ? `leave:${e.leave}` : e.duty_id || '');   // drafts keep 'leave:…' in duty_id
   function typeSelect(value) {
-    if (!segDuties.length && !value) return '';
-    const known = segDuties.some((d) => d.id === value);
+    const isLeave = value.startsWith('leave:');
+    const known = isLeave || segDuties.some((d) => d.id === value);
     const extra = value && !known ? `<option value="${esc(value)}" selected>${esc(state.duties.find((d) => d.id === value)?.name || 'Special')}</option>` : '';
     return `<select class="t-type" aria-label="Type of time"><option value="">Regular</option>${extra}${segDuties.map((d) =>
-      `<option value="${d.id}" ${d.id === value ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select>`;
+      `<option value="${d.id}" ${d.id === value ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
+      <optgroup label="Time off">${LEAVE_TYPES.map(([k, l]) => `<option value="leave:${k}" ${value === `leave:${k}` ? 'selected' : ''}>${esc(l)}</option>`).join('')}</optgroup></select>`;
   }
   const monthDay = (iso) => { const d = parseDate(iso); return `${d.getMonth() + 1}/${d.getDate()}`; };
   function segRow(iso, e = {}, first = true) {
@@ -736,10 +743,11 @@
       <td>${timeSelect('t-out', e.out || '', 'Time out', true)}</td>
       <td class="num t-hours"></td>
       <td class="note-cell"><button type="button" class="note-btn" title="Add a note" aria-label="Add a note for ${esc(fmtShort(iso))}">✎</button></td>
-      <td class="expl-cell"><div class="expl-wrap">${typeSelect(e.duty_id || '')}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (OT, absence…)" aria-label="Explanation"></div></td>
+      <td class="expl-cell"><div class="expl-wrap">${typeSelect(entryType(e))}<input class="t-expl" value="${esc(e.explanation || '')}" placeholder="Explanation (OT, absence…)" aria-label="Explanation"></div></td>
     </tr>`;
   }
   function buildRows(start, entries = []) {
+    leavePrev = null;   // recalc picks up the time-off lines as loaded before adjusting them
     $('#ts-rows').innerHTML = periodDays(start).map((iso) => {
       const segs = entries.filter((x) => x.date === iso);
       return (segs.length ? segs : [{}]).map((e, i) => segRow(iso, e, i === 0)).join('');
@@ -762,16 +770,31 @@
   function recalc() {
     let worked = 0;
     const fromTimes = {};   // duty id -> hours from blocks marked with it
+    const leaveSum = Object.fromEntries(LEAVE_TYPES.map(([, , k]) => [k, 0]));   // line -> hours from time-off blocks
     $$('#ts-rows tr').forEach((tr) => {
       const h = calcHours($('.t-in', tr).value, $('.t-out', tr).value);
       const type = $('.t-type', tr)?.value || '';
+      const leave = type.startsWith('leave:') ? LEAVE_TYPES.find(([k]) => `leave:${k}` === type) : null;
       $('.t-hours', tr).textContent = h ? hrs(h) : '';
-      tr.classList.toggle('is-duty', !!type);
+      tr.classList.toggle('is-duty', !!type && !leave);
+      tr.classList.toggle('is-leave', !!leave);
       // on a phone the note box stays tucked away until it's needed
       if (type || $('.t-expl', tr).value) tr.classList.add('note-open');
-      if (type) fromTimes[type] = (fromTimes[type] || 0) + round2(h);
+      if (leave) leaveSum[leave[2]] += round2(h);
+      else if (type) fromTimes[type] = (fromTimes[type] || 0) + round2(h);
       else worked += round2(h);
     });
+    // Vacation / Sick / Holiday lines follow the time-off blocks but stay editable (cash-outs, paid holidays):
+    // when the blocks change, the line changes by the same amount
+    if (leavePrev) {
+      for (const [k, v] of Object.entries(leaveSum)) {
+        const diff = round2(v - leavePrev[k]);
+        if (!diff) continue;
+        const i = $(`#x-${k}`), nv = Math.max(0, round2(num(i.value) + diff));
+        i.value = nv ? hrs(nv) : '';
+      }
+    }
+    leavePrev = leaveSum;
     // A duty line with time blocks is filled in from those blocks
     $$('.duty-input').forEach((i) => {
       const auto = Object.prototype.hasOwnProperty.call(fromTimes, i.dataset.duty);
@@ -847,7 +870,7 @@
             <thead><tr><th>Date</th><th>Time in</th><th>Time out</th><th class="num">Hours</th><th>Explanation of overtime or absences</th></tr></thead>
             <tbody id="ts-rows"></tbody>
           </table></div>
-          <p class="hint">Tap <strong>+</strong> by a date to add another block of time${segDuties.length ? ' (e.g. Traffic OT)' : ''}. Overnight shifts work automatically.</p>
+          <p class="hint">Took a day off? Enter the hours and pick <strong>Vacation</strong>, <strong>Sick</strong> or <strong>Floating holiday</strong>; they’re added to that line below (you can still change the line). Tap <strong>+</strong> by a date to add another block of time${segDuties.length ? ' (e.g. Traffic OT)' : ''}. Overnight shifts work automatically.</p>
 
           <div class="table-wrap"><table class="grid extras">
             <tbody>
@@ -1090,9 +1113,11 @@
           if ((i && !o) || (!i && o)) throw new Error(`Enter both time in and time out for ${tr.dataset.label}.`);
           if ((i && !isHalfHourTime(i)) || (o && !isHalfHourTime(o))) throw new Error(`Times must be in 15-minute steps (:00, :15, :30 or :45) — check ${tr.dataset.label}.`);
           if (!i && !expl) continue;
-          if (!i && type) throw new Error(`Add times for the ${segDuties.find((d) => d.id === type)?.name || 'special'} block on ${tr.dataset.label}.`);
+          const leave = type.startsWith('leave:') ? type.slice(6) : '';
+          if (!i && type) throw new Error(`Add times for the ${leave ? leaveName(leave) : segDuties.find((d) => d.id === type)?.name || 'special'} block on ${tr.dataset.label}.`);
           const entry = { date: tr.dataset.date, in: i, out: o, hours: round2(calcHours(i, o)), explanation: expl };
-          if (type) entry.duty_id = type;
+          if (leave) entry.leave = leave;
+          else if (type) entry.duty_id = type;
           entries.push(entry);
           if (i) (blocksByDay[tr.dataset.date] ||= []).push({ label: tr.dataset.label, m: segMinutes(i, o) });
         }
@@ -1183,17 +1208,18 @@
       const timed = segs.filter((x) => x.in);
       const lines = (f) => timed.map(f).join('<br>');
       const expl = segs.map((x) => {
-        const tag = x.duty_id ? `<strong>${esc(dutyName(x.duty_id))}${x.in ? ` ${esc(clock(x.in))}–${esc(clock(x.out))}` : ''}</strong>` : '';
+        const name = x.leave ? leaveName(x.leave) : x.duty_id ? dutyName(x.duty_id) : '';
+        const tag = name ? `<strong>${esc(name)}${x.in ? ` ${esc(clock(x.in))}–${esc(clock(x.out))}` : ''}</strong>` : '';
         return [tag, esc(x.explanation || '')].filter(Boolean).join(' — ');
       }).filter(Boolean).join('; ');
       return `<tr class="d ${timed.length > 1 ? 'multi' : ''}">
         <td class="c-date">${esc(fmtShort(iso))}</td>
         <td class="c">${lines((x) => esc(clock(x.in)))}</td>
         <td class="c">${lines((x) => esc(clock(x.out)))}</td>
-        <td class="c">${lines((x) => (x.duty_id ? `<span class="seg-duty">${hrs(x.hours)}*</span>` : hrs(x.hours)))}</td>
+        <td class="c">${lines((x) => (x.duty_id || x.leave ? `<span class="seg-duty">${hrs(x.hours)}*</span>` : hrs(x.hours)))}</td>
         <td class="c-expl">${expl}</td></tr>`;
     }).join('');
-    const hasDutyBlocks = (t.entries || []).some((x) => x.duty_id);
+    const hasDutyBlocks = (t.entries || []).some((x) => x.duty_id || x.leave);
     const sumRow = (label, value, note, cls = '') =>
       `<tr class="s ${cls}"><th colspan="3">${esc(label)}</th><td class="c">${value}</td><td class="s-note">${esc(note)}</td></tr>`;
     const duties = dutyLines(t);
@@ -1220,7 +1246,7 @@
           ${sumRow('Total Hours To Be Paid', hrs(t.total_paid_hours), '')}
         </tbody>
       </table>
-      ${hasDutyBlocks ? '<div class="sheet-foot">* Special-duty hours (shown in the explanation). They are totaled on their own line above, not in Total Hours Worked.</div>' : ''}
+      ${hasDutyBlocks ? '<div class="sheet-foot">* Special-duty or time-off hours (shown in the explanation). They are totaled on their own line above, not in Total Hours Worked.</div>' : ''}
       <div class="sheet-sign">
         <div class="red">${esc(SIGN_STATEMENT)}</div>
         <div class="sig-line">
@@ -2142,7 +2168,7 @@
         rows = [['Employee', 'Email', 'Date', 'Time in', 'Time out', 'Hours', 'Type', 'Explanation', 'Status']];
         for (const t of data) {
           for (const en of t.entries || []) {
-            const type = en.duty_id ? ((t.duty_hours || []).find((d) => d.duty_id === en.duty_id)?.name || 'Special') : 'Regular';
+            const type = en.leave ? leaveName(en.leave) : en.duty_id ? ((t.duty_hours || []).find((d) => d.duty_id === en.duty_id)?.name || 'Special') : 'Regular';
             rows.push([personName(t.user_id), state.people[t.user_id]?.email || '', en.date,
               en.in, en.out, en.hours, type, en.explanation || '', t.status]);
           }
