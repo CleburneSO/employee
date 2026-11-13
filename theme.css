@@ -431,3 +431,18 @@
   .toast { z-index: 210; }
   .idle-warn { z-index: 220; }
 }
+@media screen {
+  /* highlighted rows (comp time earned, your own row) use the theme's colors */
+  table.list tr.is-earned td, :root[data-theme="dark"] table.list tr.is-earned td { background: color-mix(in srgb, var(--primary) 7%, var(--card)); }
+  table.list tr.is-me td, :root[data-theme="dark"] table.list tr.is-me td { background: color-mix(in srgb, var(--gold) 8%, var(--card)); }
+  @media (max-width: 760px) {
+    /* phone cards: the card is tinted, not each line inside it; lines line up with no extra indent */
+    table.list tr td, :root[data-theme="dark"] table.list tr td { background: transparent; }
+    .table-wrap > table.list td:first-child { padding-left: 0; }
+    table.list tr.is-earned, :root[data-theme="dark"] table.list tr.is-earned { background: color-mix(in srgb, var(--primary) 7%, var(--card)); box-shadow: inset 3px 0 0 var(--primary), var(--shadow-sm); }
+    table.list tr.is-me, :root[data-theme="dark"] table.list tr.is-me { background: color-mix(in srgb, var(--gold) 8%, var(--card)); box-shadow: inset 3px 0 0 var(--gold), var(--shadow-sm); }
+    table.list tr.is-void, :root[data-theme="dark"] table.list tr.is-void { background: var(--surface-2); }
+    table.list td[data-label=""] .btn { width: 100%; }
+    table.list td:empty { display: none; }   /* no empty "Note" lines */
+  }
+}
