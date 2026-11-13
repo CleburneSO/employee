@@ -444,5 +444,22 @@
     table.list tr.is-void, :root[data-theme="dark"] table.list tr.is-void { background: var(--surface-2); }
     table.list td[data-label=""] .btn { width: 100%; }
     table.list td:empty { display: none; }   /* no empty "Note" lines */
+
+    /* timesheet totals: one clean row per line (the row is tinted, not each piece of it) */
+    table.extras, :root[data-theme="dark"] table.extras { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+    table.extras tr { padding: .7rem .85rem; border-bottom: 1px solid var(--line); }
+    table.extras tr:last-child { border-bottom: 0; background: var(--surface-2); }
+    table.extras th, table.extras td, :root[data-theme="dark"] table.extras th, :root[data-theme="dark"] table.extras td { background: transparent !important; padding: 0; }
+    table.extras td:empty { display: none; }
+    table.extras td.hint { color: var(--muted); font-size: .8rem; line-height: 1.4; margin-top: .15rem; }
+    table.extras tr.duty-row, :root[data-theme="dark"] table.extras tr.duty-row { background: var(--gold-soft); }
+    table.extras tr.duty-row.unpaid, :root[data-theme="dark"] table.extras tr.duty-row.unpaid { background: var(--info-soft); }
+    table.extras th { font-size: .95rem; }
+    table.extras tr:last-child th, table.extras tr:last-child td { font-size: 1.05rem; }
+    table.extras input { max-width: 92px; text-align: right; }
+
+    /* timesheet days: room for the date next to its + button */
+    table.entry tr { grid-template-columns: 5.7rem 1fr 1fr 2rem 1.7rem; }
+    table.entry td.day { gap: .4rem; }
   }
 }
