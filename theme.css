@@ -458,6 +458,18 @@
     table.extras tr:last-child th, table.extras tr:last-child td { font-size: 1.05rem; }
     table.extras input { max-width: 92px; text-align: right; }
 
+    /* uniform order lines: item, description, then size · qty · price, then the line total and Remove */
+    .uo-lines, :root[data-theme="dark"] .uo-lines { border: 0; }
+    .uo-lines tr { grid-template-columns: minmax(0, 1fr) 3.4rem 7.2rem; gap: .5rem; padding: .85rem 0; }
+    .uo-lines td, .table-wrap > table.uo-lines td:first-child { padding: 0; min-width: 0; background: transparent; }
+    table.grid.uo-lines input { width: 100%; min-width: 0; max-width: none; }
+    .uo-lines td.uo-line { grid-column: 1 / 3; align-self: center; text-align: left; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .uo-lines td.uo-line:empty { display: block; }
+    .uo-lines td:last-child { grid-column: 3; text-align: right; }
+    .uo-lines .uo-del, :root[data-theme="dark"] .uo-lines .uo-del { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; min-height: 32px; padding: 0 .7rem;
+      border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); border-radius: 6px; color: var(--danger); font-size: .82rem; font-weight: 600; text-decoration: none; }
+    .uo-lines .uo-del::after { content: 'Remove'; }
+
     /* timesheet days: room for the date next to its + button */
     table.entry tr { grid-template-columns: 5.7rem 1fr 1fr 2rem 1.7rem; }
     table.entry td.day { gap: .4rem; }
